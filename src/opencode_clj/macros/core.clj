@@ -1,5 +1,9 @@
 (ns opencode-clj.macros.core
-  "Core macros for opencode-clj SDK"
+  "Core macros for opencode-clj SDK.
+
+   Macros: defopencode, with-session, def-session-fn
+
+   Helper: make-session-aware"
   (:require [opencode-clj.client :as client]))
 
 (defmacro defopencode

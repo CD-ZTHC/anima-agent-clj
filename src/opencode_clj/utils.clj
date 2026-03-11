@@ -1,5 +1,8 @@
 (ns opencode-clj.utils
-  "Utility functions for error handling and common operations"
+  "Utility functions for error handling and validation.
+
+   Functions: handle-response, success?, error?, extract-error-message,
+              with-default-params, validate-required"
   (:require [clojure.string :as str]))
 
 (defn handle-response

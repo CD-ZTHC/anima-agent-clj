@@ -1,102 +1,133 @@
 (ns opencode-clj.macros.chatbot
-  "Chatbot-specific macros for opencode-clj SDK"
-  (:require [clojure.core.async :as async]
+  "Chatbot macro system for simplified conversation management.
+
+   Core macros:
+   - def-chatbot: Define chatbot configuration
+   - with-chat-session: Session context with auto cleanup
+   - send-message: Send message to session
+   - get-conversation: Get conversation history
+
+   State management:
+   - with-conversation-state: State context
+   - update-state!: Update state
+   - get-state: Get current state"
+  (:require [opencode-clj.core :as opencode]
+            [opencode-clj.client :as client]
             [clojure.string :as str]))
 
-;; Global chat handlers storage
-(def ^:dynamic chat-handlers (atom {}))
+;; ============================================================================
+;; Core Macros
+;; ============================================================================
 
 (defmacro def-chatbot
-  "Define a chatbot with configuration"
+  "Define chatbot configuration.
+
+   Options: :base-url, :default-agent, :system-prompt, :temperature, :max-tokens"
   [name & config]
   (let [config-map (apply hash-map config)]
     `(def ~name
-       (merge
-         {:client        {:base-url "http://127.0.0.1:9711"}
-          :default-model {:providerID "anthropic" :modelID "claude-3"}
-          :system-prompt "You are a helpful AI assistant"
-          :tools         {:bash true :edit true :webfetch true}
-          :max-tokens    4000
-          :temperature   0.7}
-         ~config-map))))
+       (merge {:base-url "http://127.0.0.1:9711"
+               :temperature 0.7
+               :max-tokens 4000}
+              ~config-map))))
 
-(defmacro chat-session
-  "Create a chat session with event handlers"
-  [bot & handlers]
-  `(let [bot# ~bot
-         session# {:id    (str "session-" (rand-int 10000))
-                   :title (or (:title bot#) "Chat Session")}
-         handlers# (apply merge ~handlers)]
-     (println "Chat session created:" (:id session#))
-     ;; Store handlers for later use
-     (swap! chat-handlers merge @chat-handlers handlers#)
-     session#))
+(defmacro with-chat-session
+  "Execute operations in session context with automatic cleanup."
+  [[session-sym bot-sym] & body]
+  `(let [client# (opencode/client (:base-url ~bot-sym))
+         session-result# (opencode/create-session client#)]
+     (if (:id session-result#)
+       (let [~session-sym (assoc session-result# :client client# :config ~bot-sym)]
+         (try
+           (println "Chat session created:" (client/session-id ~session-sym))
+           ~@body
+           (finally
+             (try
+               (opencode/delete-session client# (client/session-id ~session-sym))
+               (println "Chat session cleaned up:" (client/session-id ~session-sym))
+               (catch Exception e#
+                 (println "Warning: Failed to clean up session:" (.getMessage e#)))))))
+       (throw (ex-info "Failed to create session" session-result#)))))
 
-(defmacro on-message
-  "Define message handler for chat session"
-  [message-type & body]
-  `{:on-message {~message-type (fn [~'msg# ~'session#] ~@body)}})
+(defmacro send-message
+  "Send message to session. Options: :agent, :wait"
+  [session message & options]
+  (let [options-map (apply hash-map options)]
+    `(let [client# (:client ~session)
+           config# (:config ~session)
+           agent-name# (or (:agent ~options-map)
+                           (:default-agent config#)
+                           (-> (opencode/list-agents client#) last :name))]
+       (opencode/send-prompt client# (client/session-id ~session) {:text ~message} agent-name#))))
 
-(defmacro on-command
-  "Define command handler for chat session"
-  [command & body]
-  `{:on-command {~command (fn [~'args# ~'session#] ~@body)}})
+(defmacro get-conversation
+  "Get conversation history for session."
+  [session]
+  `(let [client# (:client ~session)]
+     (opencode/list-messages client# (client/session-id ~session))))
 
-(defmacro message-pipeline
-  "Define message processing pipeline"
-  [bot & steps]
-  `(let [~'bot# ~bot
-         ~'pipeline# (atom [])]
-     ;; Register pipeline steps
-     (doseq [[~'step-name# ~'step-fn#] (partition 2 [~@steps])]
-       (swap! ~'pipeline# conj {:name ~'step-name# :fn ~'step-fn#}))
-     (fn [~'input#]
-       (reduce (fn [~'acc# ~'step#]
-                 ((:fn ~'step#) ~'acc#))
-               ~'input#
-               @~'pipeline#))))
+;; ============================================================================
+;; Message Handlers
+;; ============================================================================
 
-(defmacro async-chat
-  "Async chat processing"
-  [bot & body]
-  `(let [~'bot# ~bot
-         ~'input-chan# (async/chan)
-         ~'output-chan# (async/chan)]
-     (async/go-loop []
-       (when-let [~'input# (async/<! ~'input-chan#)]
-         (async/go
-           (let [~'response# (do ~@body)]
-             (async/>! ~'output-chan# ~'response#)))
-         (recur)))
-     {:input ~'input-chan# :output ~'output-chan#}))
+(defmacro def-message-handler
+  "Define a message handler function."
+  [name [msg-sym session-sym] & body]
+  `(defn ~name [~msg-sym ~session-sym] ~@body))
+
+(defmacro def-command-handler
+  "Define a command handler function."
+  [name [args-sym session-sym] & body]
+  `(defn ~name [~args-sym ~session-sym] ~@body))
+
+;; ============================================================================
+;; State Management
+;; ============================================================================
+
+(defmacro with-conversation-state
+  "Execute operations in state context."
+  [[state-sym initial-state] & body]
+  `(let [~state-sym (atom ~initial-state)] ~@body))
+
+(defmacro update-state!
+  "Update conversation state."
+  [state & updates]
+  `(swap! ~state merge ~(apply hash-map updates)))
+
+(defmacro get-state
+  "Get current conversation state."
+  [state]
+  `@~state)
+
+;; ============================================================================
+;; Advanced Features
+;; ============================================================================
+
+(defmacro conversation-pipeline
+  "Define conversation processing pipeline."
+  [[input-sym _] & steps]
+  (let [step-pairs (partition 2 steps)
+        step-fns (mapv second step-pairs)]
+    `(fn [~input-sym]
+       (reduce (fn [acc# step-fn#] (step-fn# acc#)) ~input-sym ~step-fns))))
 
 (defmacro multimodal-message
-  "Create multimodal message"
+  "Create multimodal message with text, image, or audio."
   [& content]
-  (let [content-map (apply hash-map content)]
-    `(merge {:parts []} ~content-map)))
+  `(merge {:parts []} ~(apply hash-map content)))
 
-(defmacro conversation-state
-  "Manage conversation state"
-  [bot & config]
-  (let [config-map (apply hash-map config)]
-    `(let [~'bot# ~bot
-           ~'state# (atom (merge {:mode "general" :context {} :history []} ~config-map))]
-       (fn [~'operation# & ~'args#]
-         (case ~'operation#
-           :get @~'state#
-           :reset! (reset! ~'state# {})
-           :update! (apply swap! ~'state# merge ~'args#)
-           :transition! (let [[~'from# ~'to# ~'transform-fn#] ~'args#]
-                          (swap! ~'state# assoc :mode ~'to#)
-                          (~'transform-fn# @~'state#)))))))
+;; ============================================================================
+;; Utility Functions
+;; ============================================================================
 
+(defn extract-message-text
+  "Extract text content from message response."
+  [response]
+  (if-let [parts (:parts response)]
+    (->> parts (map :text) (filter some?) (str/join "\n"))
+    (:text response)))
 
-(comment
-  (def-chatbot my-bot
-               :title "My Demo Bot"
-               :default-model {:providerID "zai-coding-plan" :modelID "glm-4.6"}
-               :system-prompt "You are a helpful coding assistant"
-               :temperature 0.8)
-
-  )
+(defn get-session-id
+  "Get session ID from session object."
+  [session]
+  (client/session-id session))

@@ -1,14 +1,32 @@
 (ns opencode-clj.core
-  "Main opencode-server client"
+  "Main entry point for opencode-clj SDK.
+
+   Provides a unified API for interacting with opencode-server:
+
+   Client:
+     (def client (client \"http://127.0.0.1:9711\"))
+
+   Sessions: list-sessions, create-session, get-session, update-session,
+             delete-session, fork-session, share-session
+
+   Messages: list-messages, get-message, send-prompt, execute-command,
+             run-shell-command
+
+   Files: list-files, read-file, find-text, find-files, find-symbols
+
+   Config: get-config, update-config, list-providers, list-agents
+
+   CLI:
+     lein cli                    Start interactive CLI
+     lein cli -- --url <url>     Specify OpenCode server URL"
   (:require [opencode-clj.projects :as projects]
             [opencode-clj.sessions :as sessions]
             [opencode-clj.messages :as messages]
             [opencode-clj.files :as files]
             [opencode-clj.config :as config]
             [opencode-clj.macros.core :as macros]
-            [opencode-clj.macros.chatbot :as chatbot]
             [opencode-clj.macros.dsl :as dsl]
-            [opencode-clj.macros.async :as async]))
+            [opencode-clj.macros.async :as async-macros]))
 
 ;; Client creation
 (defn client
@@ -73,8 +91,18 @@
 (def set-auth config/set-auth)
 
 (defn -main
-  "Entry point for the application"
-  [& args]
+  "Entry point for the application.
+
+   For interactive CLI, use:
+     lein cli
+     lein run -m opencode-clj.cli-main"
+  [& _args]
   (println "OpenCode Clojure Client")
-  (println "Usage: (require '[opencode-clj.core :as opencode])")
-  (println "       (def client (opencode/client \"http://127.0.0.1:9711\"))"))
+  (println)
+  (println "To start interactive CLI:")
+  (println "  lein cli")
+  (println "  lein cli -- --url http://my-server:9711")
+  (println)
+  (println "REPL Usage:")
+  (println "  (require '[opencode-clj.core :as opencode])")
+  (println "  (def client (opencode/client \"http://127.0.0.1:9711\"))"))

@@ -1,5 +1,9 @@
 (ns opencode-clj.messages
-  "Messaging functions for opencode-server"
+  "Messaging functions for opencode-server.
+
+   Functions: list-messages, get-message, send-prompt, execute-command,
+              run-shell-command, revert-message, unrevert-messages,
+              respond-to-permission"
   (:require [opencode-clj.client :as http]
             [opencode-clj.utils :as utils]
             [opencode-clj.macros.core :refer [def-session-fn]]))

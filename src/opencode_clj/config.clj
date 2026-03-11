@@ -1,5 +1,9 @@
 (ns opencode-clj.config
-  "Configuration management for opencode-server"
+  "Configuration management for opencode-server.
+
+   Functions: get-config, update-config, list-providers, list-commands,
+              list-agents, get-tool-ids, list-tools, get-path, write-log,
+              get-mcp-status, get-lsp-status, get-formatter-status, set-auth"
   (:require [opencode-clj.client :as http]
             [opencode-clj.utils :as utils]))
 

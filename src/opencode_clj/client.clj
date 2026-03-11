@@ -1,12 +1,21 @@
 (ns opencode-clj.client
-  "HTTP client wrapper for opencode-server API"
+  "HTTP client wrapper for opencode-server API.
+
+   Low-level HTTP operations: get-request, post-request, patch-request,
+   put-request, delete-request.
+
+   Session binding: *session*, session-id
+
+   Not typically used directly - use opencode-clj.core instead."
   (:require [clj-http.client :as http]
             [clojure.string :as str]))
 
 (def ^:dynamic *session* nil)
 
-(defn session-id [session-id]
-  (if (map? session-id) (:id session-id) session-id))
+(defn session-id
+  ([] (session-id *session*))
+  ([session-id]
+   (if (map? session-id) (:id session-id) session-id)))
 
 (defn default-opts
   "Default HTTP client options"

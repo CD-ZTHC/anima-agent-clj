@@ -1,5 +1,8 @@
 (ns opencode-clj.files
-  "File operations for opencode-server"
+  "File operations for opencode-server.
+
+   Functions: list-files, read-file, get-file-status, find-text,
+              find-files, find-symbols"
   (:require [opencode-clj.client :as http]
             [opencode-clj.utils :as utils]))
 

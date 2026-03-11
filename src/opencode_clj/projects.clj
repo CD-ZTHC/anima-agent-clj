@@ -1,5 +1,7 @@
 (ns opencode-clj.projects
-  "Project management functions for opencode-server"
+  "Project management for opencode-server.
+
+   Functions: list-projects, current-project"
   (:require [opencode-clj.client :as http]
             [opencode-clj.utils :as utils]))
 

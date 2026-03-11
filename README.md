@@ -12,6 +12,9 @@ A comprehensive Clojure client library for interacting with the [opencode-server
 - **File Operations**: Read, write, and manage project files
 - **Configuration**: Dynamic configuration management
 - **Async Support**: Asynchronous operations for better performance
+- **Message Bus Architecture**: Unified message routing between channels and agents
+- **Multi-Channel Support**: CLI, RabbitMQ, and extensible channel system
+- **Streaming Support**: Real-time message streaming capabilities
 
 ## Installation
 
@@ -77,6 +80,115 @@ opencode-clj {:mvn/version "0.1.0-SNAPSHOT"}
     ;; Clean up
     (opencode/delete-session test-client (:id session))))
 ```
+
+## Message Bus Architecture
+
+The library now includes a powerful message bus architecture for building scalable, multi-channel AI applications.
+
+### Architecture Overview
+
+```
+User → Channel → Bus.inbound → Agent → Bus.outbound → Dispatch → Channel → User
+```
+
+### Core Components
+
+- **Bus**: Unified message routing with inbound/outbound channels
+- **Channel**: Messaging platform interface (CLI, RabbitMQ, etc.)
+- **Agent**: Message processing with OpenCode API integration
+- **Dispatch**: Outbound message routing to channels
+- **Registry**: Channel registration and lookup
+
+### Quick Example
+
+```clojure
+(ns my-app.core
+  (:require [opencode-clj.bus :as bus]
+            [opencode-clj.agent :as agent]
+            [opencode-clj.channel :as ch]
+            [opencode-clj.channel.cli :as cli]
+            [opencode-clj.channel.registry :as registry]
+            [opencode-clj.channel.dispatch :as dispatch]
+            [opencode-clj.channel.session :as session]))
+
+;; Create infrastructure
+(let [msg-bus (bus/create-bus)
+      store (session/create-store)
+      reg (registry/create-registry)
+      stats (dispatch/create-dispatch-stats)
+
+      ;; Create CLI channel
+      cli-ch (cli/create-cli-channel {:session-store store
+                                      :bus msg-bus})
+
+      ;; Create agent
+      msg-agent (agent/create-agent {:bus msg-bus
+                                     :opencode-url "http://127.0.0.1:9711"})]
+
+  ;; Register and start
+  (registry/register reg cli-ch)
+  (ch/start cli-ch)
+  (agent/start-agent msg-agent)
+  (dispatch/start-outbound-dispatch (:outbound-chan msg-bus) reg stats))
+```
+
+## Channel System
+
+### CLI Channel
+
+Interactive command-line interface:
+
+```clojure
+(require '[opencode-clj.channel.cli :as cli])
+
+(def cli-ch (cli/create-cli-channel
+             {:session-store store
+              :bus msg-bus
+              :prompt "ai> "}))
+
+(ch/start cli-ch)
+;; Now accepts user input from stdin
+```
+
+### RabbitMQ Channel
+
+Message queue integration for distributed systems:
+
+```clojure
+(require '[opencode-clj.channel.rabbitmq :as rmq])
+
+(def rmq-ch (rmq/create-rabbitmq-channel
+             {:uri "amqp://guest:guest@localhost:5672"
+              :exchange "opencode.messages"
+              :queue "opencode.inbox"
+              :bus msg-bus}))
+
+(ch/start rmq-ch)
+```
+
+### Custom Channels
+
+Implement the Channel protocol for custom integrations:
+
+```clojure
+(require '[opencode-clj.channel :as ch])
+
+(defrecord MyChannel [config running?]
+  ch/Channel
+  (start [this] ...)
+  (stop [this] ...)
+  (send-message [this target message opts] ...)
+  (channel-name [this] "my-channel")
+  (health-check [this] @running?))
+```
+
+### Routing Keys
+
+Session-based routing patterns:
+
+- `opencode.session.{session-id}` - Direct session routing
+- `opencode.user.{user-id}` - User-level routing
+- `opencode.broadcast` - Broadcast to all
 
 ## Core API
 
@@ -172,16 +284,86 @@ opencode-clj {:mvn/version "0.1.0-SNAPSHOT"}
 
 ## Advanced Usage
 
-### Using Chatbot Macros
+### New Chatbot Macro System
+
+The redesigned chatbot macro system provides a simplified, intuitive API for managing conversations with AI assistants.
+
+#### Basic Chatbot Definition
 
 ```clojure
 (ns my-app.core
   (:require [opencode-clj.macros.chatbot :as chatbot]))
 
-;; Define a chatbot with custom behavior
-(chatbot/defchatbot my-bot "http://127.0.0.1:9711"
-  :system-prompt "You are a helpful coding assistant specialized in Clojure."
-  :temperature 0.7)
+;; Define a chatbot with configuration
+(chatbot/def-chatbot coding-assistant
+  :base-url "http://127.0.0.1:9711"
+  :default-agent "claude-3"
+  :system-prompt "You are an expert programming assistant"
+  :temperature 0.7
+  :max-tokens 4000)
+```
+
+#### Conversation Management
+
+```clojure
+;; Simple conversation with automatic session management
+(chatbot/with-chat-session [session coding-assistant]
+  (let [response1 (chatbot/send-message session "Hello, can you help me with programming?")
+        response2 (chatbot/send-message session "Write a Python function to calculate factorial")
+        history (chatbot/get-conversation session)]
+    (println "Response:" (chatbot/extract-message-text response1))
+    (println "History count:" (count history))))
+```
+
+#### State Management
+
+```clojure
+;; Manage conversation state
+(chatbot/with-chat-session [session coding-assistant]
+  (chatbot/with-conversation-state [state {:mode :coding :language :python}]
+    (chatbot/update-state! state {:current-topic "functions"})
+    (let [current-state (chatbot/get-state state)]
+      (println "Current state:" current-state))))
+```
+
+#### Message Handlers
+
+```clojure
+;; Define custom message handlers
+(chatbot/def-message-handler handle-code-request
+  [msg session]
+  (when (clojure.string/includes? (clojure.string/lower-case (:text msg)) "code")
+    (println "Detected code request")
+    (chatbot/send-message session (:text msg) :agent "claude-3")))
+
+;; Use the handler
+(handle-code-request {:text "Can you write some code?"} session)
+```
+
+#### Conversation Pipeline
+
+```clojure
+;; Create message processing pipeline
+(def message-pipeline
+  (chatbot/conversation-pipeline [input _]
+    :preprocess preprocess-message
+    :process handle-message
+    :postprocess format-response))
+
+;; Use the pipeline
+(let [result (message-pipeline {:text "Hello"})]
+  (println "Processed:" result))
+```
+
+#### Multimodal Messages
+
+```clojure
+;; Create multimodal messages
+(let [image-message (chatbot/multimodal-message
+                     :text "Analyze this image"
+                     :image-path "/path/to/image.png"
+                     :audio-path "/path/to/audio.wav")]
+  (println "Multimodal message:" image-message))
 ```
 
 ### Async Operations
@@ -194,6 +376,18 @@ opencode-clj {:mvn/version "0.1.0-SNAPSHOT"}
 ;; Perform async operations
 (let [result-chan (async/send-prompt-async client session-id prompt)]
   (println "Response:" (<!! result-chan)))
+```
+
+### Legacy Chatbot Macros (Deprecated)
+
+```clojure
+(ns my-app.core
+  (:require [opencode-clj.macros.chatbot :as chatbot]))
+
+;; Legacy chatbot definition (deprecated)
+(chatbot/defchatbot my-bot "http://127.0.0.1:9711"
+  :system-prompt "You are a helpful coding assistant specialized in Clojure."
+  :temperature 0.7)
 ```
 
 ### DSL for Complex Workflows
@@ -210,6 +404,28 @@ opencode-clj {:mvn/version "0.1.0-SNAPSHOT"}
   (dsl/send-prompt "Can you suggest improvements?")
   (dsl/wait-for-response))
 ```
+
+## CLI Application
+
+The library includes a ready-to-use CLI application:
+
+```bash
+# Start interactive CLI
+lein run -m opencode-clj.cli-main
+
+# With custom options
+lein run -m opencode-clj.cli-main -- --url http://my-server:9711
+lein run -m opencode-clj.cli-main -- --prompt 'ai> '
+lein run -m opencode-clj.cli-main -- --help
+```
+
+### CLI Commands
+
+- `help` - Show available commands
+- `status` - Show session status
+- `history` - Show conversation history
+- `clear` - Clear conversation history
+- `exit/quit/:q` - Exit the CLI
 
 ## Testing
 

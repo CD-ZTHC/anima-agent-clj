@@ -1,5 +1,9 @@
 (ns opencode-clj.macros.async
-  "Async processing macros for opencode-clj SDK")
+  "Async processing macros for opencode-clj SDK.
+
+   Macros: async-operation, parallel-operations, event-stream,
+           timeout-operation, retry-operation, cache-async,
+           batch-process, rate-limiter")
 
 (defmacro async-operation
   "Wrap operation in future"

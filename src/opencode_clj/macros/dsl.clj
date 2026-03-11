@@ -1,5 +1,8 @@
 (ns opencode-clj.macros.dsl
-  "DSL macros for opencode-clj SDK")
+  "DSL macros for opencode-clj SDK.
+
+   Macros: defsession, with-project, with-config, def-workflow, pipeline,
+            stream-messages, watch-files, should-respond")
 
 (defmacro defsession
   "Define a session workflow with chainable operations"
