@@ -12,11 +12,13 @@
    (start-agent agent)
    ;; ... messages flow through ...
    (stop-agent agent)"
-  (:require [opencode-clj.bus :as bus]
-            [opencode-clj.channel.session :as session]
-            [opencode-clj.sessions :as sessions]
-            [opencode-clj.messages :as messages]
-            [clojure.core.async :as async]))
+  (:require
+   [clojure.core.async :as async]
+   [clojure.string :as string]
+   [opencode-clj.bus :as bus]
+   [opencode-clj.channel.session :as session]
+   [opencode-clj.messages :as messages]
+   [opencode-clj.sessions :as sessions]))
 
 ;; ══════════════════════════════════════════════════════════════════════════════
 ;; Agent Record
@@ -43,12 +45,12 @@
       (get-in local-session [:context :opencode-session-id])
       (try
         (let [result (sessions/create-session opencode-client)]
-          (when (and result (get-in result [:data :id]))
+          (when (and result (get-in result [:id]))
             (when-let [chat-id (:chat-id inbound-msg)]
               (session/update-session-context
                session-manager chat-id
-               {:opencode-session-id (get-in result [:data :id])}))
-            (get-in result [:data :id])))
+               {:opencode-session-id (get-in result [:id])}))
+            (get-in result [:id])))
         (catch Exception e
           (println "Failed to create OpenCode session:" (.getMessage e))
           nil)))))
@@ -75,13 +77,29 @@
                                                opencode-session-id
                                                content)]
             (let [response-text (cond
-                                  ;; Extract text from response parts
+                                  ;; Extract text from response parts (direct format)
+                                  (:parts response)
+                                  (let [parts (:parts response)
+                                        reasoning (->> parts
+                                                       (filter #(= "reasoning" (:type %)))
+                                                       (map :text)
+                                                       (string/join "\n"))
+                                        text (->> parts
+                                                  (filter #(= "text" (:type %)))
+                                                  (map :text)
+                                                  (string/join "\n"))]
+                                    (if (not-empty reasoning)
+                                      (str "【Reasoning】\n" reasoning "\n【End Reasoning】\n\n" text)
+                                      text))
+
+                                  ;; Extract text from response messages (nested format)
                                   (get-in response [:data :messages])
                                   (->> (get-in response [:data :messages])
                                        (mapcat :parts)
-                                       (filter #(= "text" (:type %)))
+                                       (filter #(or (= "text" (:type %))
+                                                    (= "reasoning" (:type %))))
                                        (map :text)
-                                       (clojure.string/join "\n"))
+                                       (string/join "\n"))
 
                                   ;; Direct content
                                   (:content response)

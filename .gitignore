@@ -16,3 +16,5 @@ pom.xml.asc
 AGENTS.md
 .idea
 .DS_Store
+.eastwood
+test_output.txt

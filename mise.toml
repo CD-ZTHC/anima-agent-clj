@@ -1,0 +1,2 @@
+[tasks.code-serve]
+run = "opencode serve --port 9711"

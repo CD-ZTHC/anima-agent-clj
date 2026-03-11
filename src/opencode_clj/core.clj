@@ -23,10 +23,7 @@
             [opencode-clj.sessions :as sessions]
             [opencode-clj.messages :as messages]
             [opencode-clj.files :as files]
-            [opencode-clj.config :as config]
-            [opencode-clj.macros.core :as macros]
-            [opencode-clj.macros.dsl :as dsl]
-            [opencode-clj.macros.async :as async-macros]))
+            [opencode-clj.config :as config]))
 
 ;; Client creation
 (defn client

@@ -1,7 +1,6 @@
 (ns basic-usage
   "Basic usage examples for opencode-clj"
-  (:require [opencode-clj.core :as opencode]
-            [opencode-clj.macros.core :as macros]))
+  (:require [opencode-clj.core :as opencode]))
 
 ;; ============================================================================
 ;; Client Creation
@@ -10,8 +9,8 @@
 ;; Method 1: Direct creation
 (def client (opencode/client "http://127.0.0.1:9711"))
 
-;; Method 2: Using macro
-(macros/defopencode my-client "http://127.0.0.1:9711")
+;; Method 2: Direct map
+(def my-client {:base-url "http://127.0.0.1:9711"})
 
 ;; ============================================================================
 ;; Session Management

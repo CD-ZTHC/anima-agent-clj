@@ -5,8 +5,7 @@
               delete-session, fork-session, abort-session, share-session,
               unshare-session, get-session-diff, summarize-session"
   (:require [opencode-clj.client :as http]
-            [opencode-clj.utils :as utils]
-            [opencode-clj.macros.core :refer [def-session-fn]]))
+            [opencode-clj.utils :as utils]))
 
 (defn list-sessions
   "List all sessions"
@@ -20,37 +19,37 @@
   (-> (http/post-request client "/session" (or options {}))
       utils/handle-response))
 
-(def-session-fn get-session
+(defn get-session
   "Get a specific session by ID"
   [client session-id & [params]]
   (-> (http/get-request client (str "/session/" (http/session-id session-id)) params)
       utils/handle-response))
 
-(def-session-fn update-session
+(defn update-session
   "Update session properties (e.g., title)"
   [client session-id updates]
   (-> (http/patch-request client (str "/session/" (http/session-id session-id)) updates)
       utils/handle-response))
 
-(def-session-fn delete-session
+(defn delete-session
   "Delete a session and all its data"
   [client session-id & [params]]
   (-> (http/delete-request client (str "/session/" (http/session-id session-id)) params)
       utils/handle-response))
 
-(def-session-fn get-session-children
+(defn get-session-children
   "Get a session's children"
   [client session-id & [params]]
   (-> (http/get-request client (str "/session/" (http/session-id session-id) "/children") params)
       utils/handle-response))
 
-(def-session-fn get-session-todo
+(defn get-session-todo
   "Get the todo list for a session"
   [client session-id & [params]]
   (-> (http/get-request client (str "/session/" (http/session-id session-id) "/todo") params)
       utils/handle-response))
 
-(def-session-fn init-session
+(defn init-session
   "Analyze the app and create an AGENTS.md file"
   [client session-id {:keys [modelID providerID messageID]}]
   (utils/validate-required {:modelID modelID :providerID providerID :messageID messageID}
@@ -59,38 +58,38 @@
                          {:modelID modelID :providerID providerID :messageID messageID})
       utils/handle-response))
 
-(def-session-fn fork-session
+(defn fork-session
   "Fork an existing session at a specific message"
   [client session-id & [message-id]]
   (let [body (if message-id {:messageID message-id} {})]
     (-> (http/post-request client (str "/session/" (http/session-id session-id) "/fork") body)
         utils/handle-response)))
 
-(def-session-fn abort-session
+(defn abort-session
   "Abort a session"
   [client session-id & [params]]
   (-> (http/post-request client (str "/session/" (http/session-id session-id) "/abort") params)
       utils/handle-response))
 
-(def-session-fn share-session
+(defn share-session
   "Share a session"
   [client session-id & [params]]
   (-> (http/post-request client (str "/session/" (http/session-id session-id) "/share") params)
       utils/handle-response))
 
-(def-session-fn unshare-session
+(defn unshare-session
   "Unshare the session"
   [client session-id & [params]]
   (-> (http/delete-request client (str "/session/" (http/session-id session-id) "/share") params)
       utils/handle-response))
 
-(def-session-fn get-session-diff
+(defn get-session-diff
   "Get the diff for this session"
   [client session-id & [params]]
   (-> (http/get-request client (str "/session/" (http/session-id session-id) "/diff") params)
       utils/handle-response))
 
-(def-session-fn summarize-session
+(defn summarize-session
   "Summarize the session"
   [client session-id {:keys [providerID modelID]}]
   (utils/validate-required {:providerID providerID :modelID modelID}
