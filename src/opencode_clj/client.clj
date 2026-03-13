@@ -8,7 +8,8 @@
 
    Not typically used directly - use opencode-clj.core instead."
   (:require [clj-http.client :as http]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [clojure.data.json :as json]))
 
 (def ^:dynamic *session* nil)
 
@@ -21,10 +22,14 @@
   "Default HTTP client options"
   []
   {:throw-exceptions false
-   :as               :json
-   :coerce           :always
+   :as               :text              ; Use text to handle chunked/streaming responses properly
    :content-type     :json
-   :accept           :json})
+   :accept           :json
+   ;; Timeout settings for chunked/streaming responses
+   ;; Use very long timeout for AI operations that may take a while
+   :socket-timeout   600000  ; 10 minutes
+   :connection-timeout 60000
+   :conn-timeout     60000})
 
 (defn build-url
   "Build full URL from base URL and endpoint path"
@@ -44,7 +49,14 @@
   "Parse HTTP response and handle errors"
   [response]
   (let [status (:status response)
-        body (:body response)]
+        body-str (:body response)
+        ;; Parse JSON body if present
+        body (when (and body-str (string? body-str) (> (count body-str) 0))
+              (try
+                (json/read-str body-str {:key-fn keyword})
+                (catch Exception e
+                  (println "  [DEBUG] JSON parse error:" (.getMessage e))
+                  body-str)))]
     (case status
       200 {:success true :data body}
       201 {:success true :data body}
@@ -60,19 +72,21 @@
         opts (-> (default-opts)
                  (merge (:http-opts client))
                  (add-query-params params))]
-    (-> (http/get url opts)
-        parse-response)))
+    (let [response (http/get url opts)]
+      (parse-response response))))
 
 (defn post-request
   "Make POST request to opencode-server"
   [client endpoint body & [params]]
   (let [url (build-url (:base-url client) endpoint)
+        ;; Manually encode body to JSON string for reliable encoding
+        json-body (json/write-str body)
         opts (-> (default-opts)
                  (merge (:http-opts client))
-                 (assoc :form-params body)
+                 (assoc :body json-body)
                  (add-query-params params))]
-    (-> (http/post url opts)
-        parse-response)))
+    (let [response (http/post url opts)]
+      (parse-response response))))
 
 (defn patch-request
   "Make PATCH request to opencode-server"

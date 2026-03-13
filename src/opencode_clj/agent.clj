@@ -1,141 +1,71 @@
 (ns opencode-clj.agent
-  "Message processing agent.
+  "Message processing agent - Backward Compatibility Layer.
 
-   The Agent consumes InboundMessages from the Bus, processes them
-   (e.g., calls OpenCode API), and publishes OutboundMessages back
-   to the Bus.
+   This namespace provides backward compatibility for the legacy Agent API.
+   Internally, it creates and manages a CoreAgent with a WorkerPool.
 
-   Flow: Bus.inbound → Agent.process-message → Bus.outbound
+   The Agent now uses the new Agent Cluster Architecture:
+   - CoreAgent: Handles reasoning, orchestration, and memory
+   - WorkerPool: Manages WorkerAgents for task execution
 
-   Usage:
+   Flow: Bus.inbound → CoreAgent.reason → CoreAgent.orchestrate → Workers → Bus.outbound
+
+   Usage (Legacy API - still supported):
    (def agent (create-agent {:bus bus :opencode-client client}))
    (start-agent agent)
    ;; ... messages flow through ...
-   (stop-agent agent)"
+   (stop-agent agent)
+
+   For more control, use the new CoreAgent directly:
+   (require '[opencode-clj.agent.core-agent :as core])
+   (def agent (core/create-core-agent {:bus bus :opencode-client client}))"
   (:require
-   [clojure.core.async :as async]
-   [clojure.string :as string]
+   [opencode-clj.agent.core-agent :as core-agent]
+   [opencode-clj.agent.worker-agent :as worker-agent]
+   [opencode-clj.agent.worker-pool :as worker-pool]
    [opencode-clj.bus :as bus]
-   [opencode-clj.channel.session :as session]
-   [opencode-clj.messages :as messages]
-   [opencode-clj.sessions :as sessions]))
+   [opencode-clj.channel.session :as session]))
 
 ;; ══════════════════════════════════════════════════════════════════════════════
-;; Agent Record
+;; Re-export Types for Compatibility
 ;; ══════════════════════════════════════════════════════════════════════════════
 
+;; Legacy Agent record - now wraps CoreAgent
 (defrecord Agent
            [bus              ; Bus instance
             opencode-client  ; OpenCode API client {:base-url "..."}
             session-manager  ; SessionStore for managing sessions
             running?         ; atom<boolean>
-            worker])         ; atom - holds the async go block
+            core-agent       ; The underlying CoreAgent
+            worker])         ; atom - holds reference for compatibility
 
 ;; ══════════════════════════════════════════════════════════════════════════════
-;; Message Processing
+;; Message Processing (Delegated to CoreAgent)
 ;; ══════════════════════════════════════════════════════════════════════════════
-
-(defn- get-or-create-opencode-session
-  "Get or create an OpenCode session for processing."
-  [opencode-client session-manager inbound-msg]
-  (let [session-key (:session-key inbound-msg)
-        local-session (when session-key
-                        (session/get-session-by-routing-key session-manager session-key))]
-    (if (and local-session (get-in local-session [:context :opencode-session-id]))
-      (get-in local-session [:context :opencode-session-id])
-      (try
-        (let [result (sessions/create-session opencode-client)]
-          (when (and result (get-in result [:id]))
-            (when-let [chat-id (:chat-id inbound-msg)]
-              (session/update-session-context
-               session-manager chat-id
-               {:opencode-session-id (get-in result [:id])}))
-            (get-in result [:id])))
-        (catch Exception e
-          (println "Failed to create OpenCode session:" (.getMessage e))
-          nil)))))
 
 (defn process-message
   "Process a single InboundMessage.
 
-   1. Get or create OpenCode session
-   2. Send message to OpenCode API
-   3. Build OutboundMessage with response
-   4. Publish to bus/outbound
+   This function is provided for backward compatibility.
+   In the new architecture, message processing is handled internally by CoreAgent.
 
-   Returns the OutboundMessage on success, or error map on failure."
+   For direct task execution, use worker-agent/submit-task! instead."
   [agent inbound-msg]
-  (let [{:keys [bus opencode-client session-manager]} agent
-        channel-name (:channel inbound-msg)
-        content (:content inbound-msg)]
-    (try
-      (let [opencode-session-id (get-or-create-opencode-session
-                                 opencode-client session-manager inbound-msg)]
-        (if opencode-session-id
-          ;; Send to OpenCode API
-          (let [response (messages/send-prompt opencode-client
-                                               opencode-session-id
-                                               content)]
-            (let [response-text (cond
-                                  ;; Extract text from response parts (direct format)
-                                  (:parts response)
-                                  (let [parts (:parts response)
-                                        reasoning (->> parts
-                                                       (filter #(= "reasoning" (:type %)))
-                                                       (map :text)
-                                                       (string/join "\n"))
-                                        text (->> parts
-                                                  (filter #(= "text" (:type %)))
-                                                  (map :text)
-                                                  (string/join "\n"))]
-                                    (if (not-empty reasoning)
-                                      (str "【Reasoning】\n" reasoning "\n【End Reasoning】\n\n" text)
-                                      text))
-
-                                  ;; Extract text from response messages (nested format)
-                                  (get-in response [:data :messages])
-                                  (->> (get-in response [:data :messages])
-                                       (mapcat :parts)
-                                       (filter #(or (= "text" (:type %))
-                                                    (= "reasoning" (:type %))))
-                                       (map :text)
-                                       (string/join "\n"))
-
-                                  ;; Direct content
-                                  (:content response)
-                                  (:content response)
-
-                                  ;; Fallback
-                                  :else (str response))
-
-                  outbound (bus/make-outbound
-                            {:channel channel-name
-                             :account-id (get-in inbound-msg [:metadata :account-id] "default")
-                             :chat-id (:chat-id inbound-msg)
-                             :content response-text
-                             :reply-target (:sender-id inbound-msg)
-                             :stage :final})]
-              (bus/publish-outbound! bus outbound)
-              outbound))
-
-          ;; Failed to get session
-          (let [error-msg (bus/make-outbound
-                           {:channel channel-name
-                            :content "Error: Failed to create OpenCode session. Make sure opencode-server is running."
-                            :reply-target (:sender-id inbound-msg)
-                            :stage :final})]
-            (bus/publish-outbound! bus error-msg)
-            error-msg)))
-
-      (catch Exception e
-        (println "Agent error processing message:" (.getMessage e))
-        (let [error-msg (bus/make-outbound
-                         {:channel channel-name
-                          :content (str "Error: " (.getMessage e))
-                          :reply-target (:sender-id inbound-msg)
-                          :stage :final})]
-          (bus/publish-outbound! bus error-msg)
-          error-msg)))))
+  (when-let [ca (:core-agent agent)]
+    ;; CoreAgent handles processing automatically via its main loop
+    ;; This function is kept for API compatibility but the actual
+    ;; processing happens through the bus subscription
+    (let [channel-name (:channel inbound-msg)
+          content (:content inbound-msg)]
+      ;; Publish to inbound bus - CoreAgent will pick it up
+      (let [inbound (bus/make-inbound
+                     {:channel channel-name
+                      :chat-id (:chat-id inbound-msg)
+                      :content content
+                      :sender-id (:sender-id inbound-msg)
+                      :session-key (:session-key inbound-msg)
+                      :metadata (:metadata inbound-msg)})]
+        (bus/publish-inbound! (:bus agent) inbound)))))
 
 ;; ══════════════════════════════════════════════════════════════════════════════
 ;; Agent Lifecycle
@@ -143,29 +73,55 @@
 
 (defn start-agent
   "Start the agent - begins consuming messages from bus/inbound.
+   Internally starts the CoreAgent and its WorkerPool.
    Returns the agent."
   [agent]
   (when-not @(:running? agent)
     (reset! (:running? agent) true)
-    (let [worker (async/go-loop []
-                   (when @(:running? agent)
-                     (when-let [msg (async/<! (:inbound-chan (:bus agent)))]
-                       (try
-                         (process-message agent msg)
-                         (catch Exception e
-                           (println "Agent loop error:" (.getMessage e))))
-                       (recur))))]
-      (reset! (:worker agent) worker)))
+    ;; Start the underlying CoreAgent
+    (core-agent/start-core-agent! (:core-agent agent)))
   agent)
 
 (defn stop-agent
   "Stop the agent - stops consuming messages.
+   Internally stops the CoreAgent and its WorkerPool.
    Returns the agent."
   [agent]
   (reset! (:running? agent) false)
-  (when-let [worker @(:worker agent)]
-    (async/close! worker))
+  ;; Stop the underlying CoreAgent
+  (when-let [ca (:core-agent agent)]
+    (core-agent/stop-core-agent! ca))
   agent)
+
+;; ══════════════════════════════════════════════════════════════════════════════
+;; Extended API - Access to New Architecture
+;; ══════════════════════════════════════════════════════════════════════════════
+
+(defn get-core-agent
+  "Get the underlying CoreAgent for advanced operations."
+  [agent]
+  (:core-agent agent))
+
+(defn get-worker-pool
+  "Get the WorkerPool for direct task submission."
+  [agent]
+  (when-let [ca (:core-agent agent)]
+    (:worker-pool ca)))
+
+(defn agent-status
+  "Get detailed agent status including worker pool info."
+  [agent]
+  (merge
+   {:running? @(:running? agent)}
+   (when-let [ca (:core-agent agent)]
+     (core-agent/core-agent-status ca))))
+
+(defn scale-workers
+  "Scale the worker pool to a specific size.
+   Only available in the new architecture."
+  [agent size]
+  (when-let [pool (get-worker-pool agent)]
+    (worker-pool/scale-to pool size)))
 
 ;; ══════════════════════════════════════════════════════════════════════════════
 ;; Constructor
@@ -178,15 +134,50 @@
      :bus              - Bus instance (required)
      :opencode-client  - OpenCode client map {:base-url \"...\"}
      :session-manager  - SessionStore instance (will create if not provided)
-     :opencode-url     - OpenCode server URL (default: http://127.0.0.1:9711)"
-  [{:keys [bus opencode-client session-manager opencode-url]
+     :opencode-url     - OpenCode server URL (default: http://127.0.0.1:9711)
+     :pool-config      - WorkerPool configuration (new architecture)
+       :min-size       - Minimum workers (default: 1)
+       :max-size       - Maximum workers (default: 10)
+       :initial-size   - Starting workers (default: 2)
+
+   The agent now uses the Agent Cluster Architecture internally:
+   - CoreAgent handles reasoning, orchestration, and memory
+   - WorkerPool manages WorkerAgents for parallel task execution"
+  [{:keys [bus opencode-client session-manager opencode-url pool-config]
     :or {opencode-url "http://127.0.0.1:9711"}}]
-  (let [client-map (or opencode-client
-                       {:base-url opencode-url})
-        sm (or session-manager (session/create-store))]
+  (let [client-map (or opencode-client {:base-url opencode-url})
+        sm (or session-manager (session/create-store))
+        ;; Create the underlying CoreAgent
+        core (core-agent/create-core-agent
+              {:bus bus
+               :opencode-client client-map
+               :session-manager sm
+               :opencode-url opencode-url
+               :pool-config pool-config})]
     (->Agent
      bus
      client-map
      sm
      (atom false)
+     core
      (atom nil))))
+
+;; ══════════════════════════════════════════════════════════════════════════════
+;; Direct Task Submission (New API)
+;; ══════════════════════════════════════════════════════════════════════════════
+
+(defn submit-direct-task!
+  "Submit a task directly to the worker pool.
+   Bypasses the CoreAgent's reasoning/orchestration layer.
+   Useful for simple, well-defined tasks.
+
+   Returns a channel that will receive the TaskResult.
+
+   Example:
+   (submit-direct-task! agent
+     {:type :api-call
+      :payload {:opencode-session-id \"xxx\" :content \"Hello\"}})"
+  [agent task-spec]
+  (when-let [pool (get-worker-pool agent)]
+    (let [task (worker-agent/make-task task-spec)]
+      (worker-pool/submit-task! pool task))))

@@ -1,141 +1,90 @@
 (ns opencode-clj.bus
   "Unified message bus for routing messages between channels and agent.
-
-   Core types:
-   - InboundMessage: Channel → Agent (user input)
-   - OutboundMessage: Agent → Channel (AI response)
-   - Bus: Holds inbound/outbound core.async channels
-
-   Message flow:
-   Channel.recv → Bus.inbound → Agent → Bus.outbound → Dispatch → Channel.send"
-  (:require [clojure.core.async :as async])
+   Now integrated with the Agent Cluster architecture."
+  (:require [clojure.core.async :as async]
+            [opencode-clj.bus.core :as cluster-core]
+            [opencode-clj.bus.inbound :as inbound]
+            [opencode-clj.bus.outbound :as outbound]
+            [opencode-clj.bus.internal :as internal]
+            [opencode-clj.bus.control :as control])
   (:import [java.util UUID Date]))
 
 ;; ══════════════════════════════════════════════════════════════════════════════
-;; Message Types
+;; Legacy Types & Constructors (Keeping for compatibility)
 ;; ══════════════════════════════════════════════════════════════════════════════
 
 (defrecord InboundMessage
-           [id              ; Message unique ID
-            channel         ; Source channel name (e.g. "cli", "rabbitmq")
-            sender-id       ; Sender identifier
-            chat-id         ; Chat/conversation identifier
-            content         ; Message text content
-            session-key     ; Session routing key
-            media           ; Attached media [{:type :url} ...]
-            metadata])      ; Additional metadata {:routing-key :headers ...}
+           [id channel sender-id chat-id content session-key media metadata])
 
 (defrecord OutboundMessage
-           [id              ; Message unique ID
-            channel         ; Target channel name
-            account-id      ; Target account identifier
-            chat-id         ; Chat/conversation identifier
-            content         ; Response text content
-            media           ; Attached media
-            stage           ; :chunk or :final
-            reply-target])  ; Reply target (routing-key, sender, etc.)
-
-;; ══════════════════════════════════════════════════════════════════════════════
-;; Message Constructors
-;; ══════════════════════════════════════════════════════════════════════════════
+           [id channel account-id chat-id content media stage reply-target])
 
 (defn make-inbound
-  "Create an InboundMessage.
-
-   Required: :channel, :content
-   Optional: :sender-id, :chat-id, :session-key, :media, :metadata"
+  "Legacy constructor for InboundMessage."
   [{:keys [channel sender-id chat-id content session-key media metadata]
-    :or {sender-id "unknown"
-         media []
-         metadata {}}}]
-  (->InboundMessage
-   (str (UUID/randomUUID))
-   channel
-   sender-id
-   chat-id
-   content
-   session-key
-   media
-   metadata))
+    :or {sender-id "unknown" media [] metadata {}}}]
+  (->InboundMessage (str (UUID/randomUUID)) channel sender-id chat-id content session-key media metadata))
 
 (defn make-outbound
-  "Create an OutboundMessage.
-
-   Required: :channel, :content
-   Optional: :account-id, :chat-id, :media, :stage, :reply-target"
+  "Legacy constructor for OutboundMessage."
   [{:keys [channel account-id chat-id content media stage reply-target]
-    :or {account-id "default"
-         media []
-         stage :final}}]
-  (->OutboundMessage
-   (str (UUID/randomUUID))
-   channel
-   account-id
-   chat-id
-   content
-   media
-   stage
-   reply-target))
+    :or {account-id "default" media [] stage :final}}]
+  (->OutboundMessage (str (UUID/randomUUID)) channel account-id chat-id content media stage reply-target))
 
 ;; ══════════════════════════════════════════════════════════════════════════════
-;; Bus
+;; Cluster Integration
 ;; ══════════════════════════════════════════════════════════════════════════════
 
 (defrecord Bus
-           [inbound-chan     ; core.async channel: Channel → Agent
-            outbound-chan])  ; core.async channel: Agent → Channel
+           [inbound     ; InboundBus
+            outbound    ; OutboundBus
+            internal    ; InternalBus
+            control     ; ControlBus
+            ;; Legacy compatibility fields
+            inbound-chan  ; Direct access to inbound channel
+            outbound-chan ; Direct access to outbound channel
+            ])
 
 (defn create-bus
-  "Create a new message bus with inbound/outbound channels.
-
-   Options:
-     :inbound-buf   - inbound channel buffer size (default: 100)
-     :outbound-buf  - outbound channel buffer size (default: 100)"
-  ([]
-   (create-bus {}))
-  ([{:keys [inbound-buf outbound-buf]
-     :or {inbound-buf 100
-          outbound-buf 100}}]
-   (->Bus
-    (async/chan inbound-buf)
-    (async/chan outbound-buf))))
+  "Create a new cluster-aware message bus.
+   Accepts optional options for backward compatibility."
+  ([] (create-bus {}))
+  ([_opts]
+   (let [in (inbound/create-bus)
+         out (outbound/create-bus)]
+     (->Bus
+      in
+      out
+      (internal/create-bus)
+      (control/create-bus)
+      (:chan in)
+      (:chan out)))))
 
 (defn close-bus
-  "Close both bus channels."
+  "Close all bus channels."
   [bus]
-  (async/close! (:inbound-chan bus))
-  (async/close! (:outbound-chan bus)))
+  (cluster-core/close! (:inbound bus))
+  (cluster-core/close! (:outbound bus))
+  (cluster-core/close! (:internal bus))
+  (cluster-core/close! (:control bus)))
 
 ;; ══════════════════════════════════════════════════════════════════════════════
-;; Bus Operations
+;; Bus Operations (Unified)
 ;; ══════════════════════════════════════════════════════════════════════════════
 
-(defn publish-inbound!
-  "Publish an InboundMessage to the bus. Blocking."
-  [bus msg]
-  (async/>!! (:inbound-chan bus) msg))
+(defn publish-inbound! [bus msg] (cluster-core/publish! (:inbound bus) msg))
+(defn publish-outbound! [bus msg] (cluster-core/publish! (:outbound bus) msg))
+(defn publish-internal! [bus msg] (cluster-core/publish! (:internal bus) msg))
+(defn publish-control! [bus msg] (cluster-core/publish! (:control bus) msg))
 
-(defn publish-outbound!
-  "Publish an OutboundMessage to the bus. Blocking."
-  [bus msg]
-  (async/>!! (:outbound-chan bus) msg))
+(defn publish-inbound-async! [bus msg]
+  (async/go (publish-inbound! bus msg)))
 
-(defn publish-inbound-async!
-  "Publish an InboundMessage to the bus. Non-blocking (go block)."
-  [bus msg]
-  (async/go (async/>! (:inbound-chan bus) msg)))
+(defn publish-outbound-async! [bus msg]
+  (async/go (publish-outbound! bus msg)))
 
-(defn publish-outbound-async!
-  "Publish an OutboundMessage to the bus. Non-blocking (go block)."
-  [bus msg]
-  (async/go (async/>! (:outbound-chan bus) msg)))
+(defn consume-inbound! [bus]
+  (async/<!! (:chan (:inbound bus))))
 
-(defn consume-inbound!
-  "Consume one InboundMessage from the bus. Blocking."
-  [bus]
-  (async/<!! (:inbound-chan bus)))
-
-(defn consume-outbound!
-  "Consume one OutboundMessage from the bus. Blocking."
-  [bus]
-  (async/<!! (:outbound-chan bus)))
+(defn consume-outbound! [bus]
+  (async/<!! (:chan (:outbound bus))))
