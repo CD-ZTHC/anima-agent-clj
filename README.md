@@ -1,20 +1,113 @@
-# OpenCode Clojure Client
+# OpenCode-Clj
 
-A comprehensive Clojure client library for interacting with the [opencode-server](https://github.com/sst/opencode) REST API. This library provides idiomatic Clojure wrappers for all opencode-server functionality, making it easy to integrate AI-powered coding assistance into your Clojure applications.
+A comprehensive Clojure client library and agent cluster framework for building scalable, multi-channel AI applications with the [opencode-server](https://github.com/sst/opencode) REST API.
 
 ## Features
 
 - **Full API Coverage**: Complete implementation of all opencode-server endpoints
 - **Idiomatic Clojure**: Clean, functional API design following Clojure best practices
-- **Macro Support**: Convenient macros for common operations
-- **Session Management**: Create, manage, and interact with coding sessions
-- **Message Handling**: Send prompts and receive AI responses
-- **File Operations**: Read, write, and manage project files
-- **Configuration**: Dynamic configuration management
-- **Async Support**: Asynchronous operations for better performance
+- **Agent Cluster Architecture**: Scalable multi-agent system with heterogeneous computing capabilities
 - **Message Bus Architecture**: Unified message routing between channels and agents
-- **Multi-Channel Support**: CLI, RabbitMQ, and extensible channel system
+- **Multi-Channel Support**: CLI, RabbitMQ, HTTP, WebSocket, and extensible channel system
+- **Intelligent Task Routing**: AI-powered task classification and routing
 - **Streaming Support**: Real-time message streaming capabilities
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Agent Cluster Architecture                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                         External Interface Layer                       │   │
+│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐         │   │
+│  │  │   CLI   │ │ RabbitMQ│ │  HTTP   │ │WebSocket│ │   ...   │         │   │
+│  │  │ Channel │ │ Channel │ │ Channel │ │ Channel │ │ Channel │         │   │
+│  │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘         │   │
+│  └───────┼───────────┼───────────┼───────────┼───────────┼───────────────┘   │
+│          │           │           │           │           │                    │
+│          └───────────┴─────┬─────┴───────────┴───────────┘                    │
+│                              ↓                                                │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                         Channel Adapter Hub                            │   │
+│  │                    (统一接入层 / 协议转换 / 路由)                        │   │
+│  └────────────────────────────────┬─────────────────────────────────────┘   │
+│                                   ↓                                          │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                           Message Bus                                  │   │
+│  │  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────────┐     │   │
+│  │  │   Inbound Bus   │ │  Internal Bus   │ │    Outbound Bus     │     │   │
+│  │  │  (外部请求入口)  │ │  (组件间通信)   │ │   (响应/事件输出)   │     │   │
+│  │  └────────┬────────┘ └────────┬────────┘ └──────────┬──────────┘     │   │
+│  └───────────┼───────────────────┼────────────────────┼─────────────────┘   │
+│              │                   │                    │                       │
+│              ↓                   ↓                    ↓                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                        Event Dispatcher                                │  │
+│  │              (中断控制器 - 优先级调度 / 负载均衡 / 路由)                  │  │
+│  └───────────────────────────────────┬───────────────────────────────────┘  │
+│                                      │                                       │
+│              ┌───────────────────────┼───────────────────────┐               │
+│              │                       │                       │               │
+│              ↓                       ↓                       ↓               │
+│  ┌───────────────────┐  ┌───────────────────┐  ┌───────────────────┐        │
+│  │   Core Agent      │  │   Core Agent      │  │   Core Agent      │        │
+│  │   (复杂推理)       │  │   (复杂推理)       │  │   (复杂推理)       │        │
+│  │        ↓          │  │        ↓          │  │        ↓          │        │
+│  │   Worker Pool     │  │   Worker Pool     │  │   Worker Pool     │        │
+│  │   (轻量任务)       │  │   (轻量任务)       │  │   (轻量任务)       │        │
+│  │                   │  │                   │  │                   │        │
+│  │   Cluster Node 0  │  │   Cluster Node 1  │  │   Cluster Node N  │        │
+│  └─────────┬─────────┘  └─────────┬─────────┘  └─────────┬─────────┘        │
+│            │                      │                      │                  │
+│            └──────────────────────┼──────────────────────┘                  │
+│                                   ↓                                         │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                     Parallel Agent Pool                                │  │
+│  │           (大规模并行任务处理 / MapReduce / 批量推理)                    │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                     Specialist Agent Pool                              │  │
+│  │    ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐               │  │
+│  │    │  Code    │ │  Search  │ │  Analysis│ │   Tool   │  ...          │  │
+│  │    │ Special. │ │ Special. │ │ Special. │ │ Special. │               │  │
+│  │    └──────────┘ └──────────┘ └──────────┘ └──────────┘               │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                        Support Layer                                   │  │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐     │  │
+│  │  │  Context    │ │   Result    │ │    Data     │ │   Config    │     │  │
+│  │  │  Manager    │ │   Cache     │ │  Pipeline   │ │   Center    │     │  │
+│  │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘     │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Core Components
+
+### Agent Types
+
+| Agent Type | Role | Responsibilities |
+|------------|------|------------------|
+| **Core Agent** | Complex Reasoning | Complex reasoning, decision making, orchestration, session context management |
+| **Worker Agent** | Lightweight Tasks | Simple queries, data preprocessing/postprocessing, IO-intensive tasks |
+| **Parallel Agent Pool** | Parallel Processing | Large-scale parallel tasks, MapReduce, batch inference, data analysis |
+| **Specialist Agent Pool** | Domain Experts | Code generation, search, analysis, tool execution, security audit |
+
+### Infrastructure Components
+
+| Component | Role | Description |
+|-----------|------|-------------|
+| **Message Bus** | Communication Hub | Unified communication channel with inbound, internal, and outbound sub-buses |
+| **Event Dispatcher** | Task Scheduling | Priority scheduling, load balancing, circuit breaking |
+| **Context Manager** | State Management | Session storage, context window management, state persistence |
+| **Result Cache** | Performance | Multi-level caching (L1/L2/L3) for inference results |
+| **Data Pipeline** | Data Flow | Batch data transfer, ETL processing, backpressure management |
+| **Channel Adapters** | External Interface | CLI, RabbitMQ, HTTP, WebSocket integrations |
 
 ## Installation
 
@@ -32,7 +125,7 @@ opencode-clj {:mvn/version "0.1.0-SNAPSHOT"}
 
 ## Quick Start
 
-### 1. Create a Client
+### 1. Basic Client
 
 ```clojure
 (ns my-app.core
@@ -40,66 +133,16 @@ opencode-clj {:mvn/version "0.1.0-SNAPSHOT"}
 
 ;; Create a client connected to your opencode-server
 (def client (opencode/client "http://127.0.0.1:9711"))
+
+;; Create a session and send a prompt
+(let [session (opencode/create-session client {:title "My Session"})]
+  (opencode/send-prompt client
+                        (:id session)
+                        {:text "Hello, can you help me with programming?"}
+                        "user-chat-assistant"))
 ```
 
-### 2. Using Macros for Convenience
-
-```clojure
-(ns my-app.core
-  (:require [opencode-clj.macros.core :as macros]))
-
-;; Define a client using the macro
-(macros/defopencode my-client "http://127.0.0.1:9711")
-```
-
-### 3. Basic Conversation Example
-
-```clojure
-(ns my-app.core
-  (:require [opencode-clj.core :as opencode]
-            [opencode-clj.macros.core :as macros]))
-
-(macros/defopencode test-client "http://127.0.0.1:9711")
-
-(defn test-basic-conversation []
-  ;; Create a session
-  (let [session (opencode/create-session test-client {:title "Test Conversation"})]
-    (println "Created session:" (:id session))
-
-    ;; Send a prompt
-    (let [response (opencode/send-prompt test-client
-                                        (:id session)
-                                        {:text "Hello, can you help me write a Python hello world function?"}
-                                        "user-chat-assistant")]
-      (println "Response:" response))
-
-    ;; Get message history
-    (let [messages (opencode/list-messages test-client (:id session))]
-      (println "Message count:" (count messages)))
-
-    ;; Clean up
-    (opencode/delete-session test-client (:id session))))
-```
-
-## Message Bus Architecture
-
-The library now includes a powerful message bus architecture for building scalable, multi-channel AI applications.
-
-### Architecture Overview
-
-```
-User → Channel → Bus.inbound → Agent → Bus.outbound → Dispatch → Channel → User
-```
-
-### Core Components
-
-- **Bus**: Unified message routing with inbound/outbound channels
-- **Channel**: Messaging platform interface (CLI, RabbitMQ, etc.)
-- **Agent**: Message processing with OpenCode API integration
-- **Dispatch**: Outbound message routing to channels
-- **Registry**: Channel registration and lookup
-
-### Quick Example
+### 2. Message Bus Architecture
 
 ```clojure
 (ns my-app.core
@@ -132,11 +175,44 @@ User → Channel → Bus.inbound → Agent → Bus.outbound → Dispatch → Cha
   (dispatch/start-outbound-dispatch (:outbound-chan msg-bus) reg stats))
 ```
 
+### 3. Intelligent Task Routing
+
+```clojure
+(require '[opencode-clj.agent.intelligent-router :as router])
+
+;; Create intelligent router
+(def router (router/create-intelligent-router
+              {:bus bus
+               :register-defaults true}))
+
+;; Start router
+(router/start-router! router)
+
+;; Send message with automatic classification
+(router/send-message router "Write a function to sort a list" {})
+;; => {:success true
+;;     :task-type :code-generation
+;;     :confidence 0.85
+;;     :message "✨ 代码生成完成..."}
+```
+
+**Supported Task Types:**
+
+| Type | Description | Keywords |
+|------|-------------|----------|
+| `:code-generation` | Code generation | write, create, implement |
+| `:code-review` | Code review | review, check, analyze |
+| `:code-debug` | Debugging | debug, fix, error |
+| `:code-refactor` | Refactoring | refactor, optimize |
+| `:web-search` | Web search | search, find |
+| `:documentation` | Documentation | document, docs |
+| `:data-analysis` | Data analysis | analyze, data |
+| `:test-generation` | Test generation | test, spec |
+| `:general-chat` | General chat | hello, hi |
+
 ## Channel System
 
 ### CLI Channel
-
-Interactive command-line interface:
 
 ```clojure
 (require '[opencode-clj.channel.cli :as cli])
@@ -147,12 +223,9 @@ Interactive command-line interface:
               :prompt "ai> "}))
 
 (ch/start cli-ch)
-;; Now accepts user input from stdin
 ```
 
 ### RabbitMQ Channel
-
-Message queue integration for distributed systems:
 
 ```clojure
 (require '[opencode-clj.channel.rabbitmq :as rmq])
@@ -168,8 +241,6 @@ Message queue integration for distributed systems:
 
 ### Custom Channels
 
-Implement the Channel protocol for custom integrations:
-
 ```clojure
 (require '[opencode-clj.channel :as ch])
 
@@ -182,24 +253,39 @@ Implement the Channel protocol for custom integrations:
   (health-check [this] @running?))
 ```
 
-### Routing Keys
+## Real-time Multi-Agent Demo
 
-Session-based routing patterns:
+The library includes a real-time multi-agent system with non-blocking dialog:
 
-- `opencode.session.{session-id}` - Direct session routing
-- `opencode.user.{user-id}` - User-level routing
-- `opencode.broadcast` - Broadcast to all
+```bash
+# Start OpenCode server first (default: http://127.0.0.1:9711)
+lein run -m realtime-multi-agent-demo
+
+# Or with custom URL
+lein run -m realtime-multi-agent-demo -- --url http://my-server:9711
+```
+
+**Example Interaction:**
+
+```
+> hi
+  🏷️ AI Classification: :simple-chat (confidence: 95%)
+💬 Hello! How can I help you today?
+
+> Build a website with React frontend and Node.js backend
+  🏷️ AI Classification: :complex-task (confidence: 95%)
+🚀 Task started! ID: abc-123
+Type 'status' to check progress
+
+> status
+📋 Task Status:
+🔄 Build a website... - running (35%)
+  ⏳ Project Setup - pending
+  🔄 Database Design - running
+  ...
+```
 
 ## Core API
-
-### Client Management
-
-```clojure
-;; Create client with options
-(def client (opencode/client "http://127.0.0.1:9711"
-                            {:directory "/path/to/project"
-                             :http-opts {:timeout 5000}}))
-```
 
 ### Session Management
 
@@ -218,12 +304,6 @@ Session-based routing patterns:
 
 ;; Delete session
 (opencode/delete-session client session-id)
-
-;; Fork session
-(opencode/fork-session client session-id)
-
-;; Share session
-(opencode/share-session client session-id)
 ```
 
 ### Messaging
@@ -236,12 +316,6 @@ Session-based routing patterns:
 
 ;; List messages in session
 (opencode/list-messages client session-id)
-
-;; Execute command
-(opencode/execute-command client session-id command)
-
-;; Run shell command
-(opencode/run-shell-command client session-id command)
 ```
 
 ### File Operations
@@ -255,159 +329,9 @@ Session-based routing patterns:
 
 ;; Find text in files
 (opencode/find-text client search-pattern)
-
-;; Find files by pattern
-(opencode/find-files client file-pattern)
-
-;; Find symbols
-(opencode/find-symbols client symbol-pattern)
-```
-
-### Configuration
-
-```clojure
-;; Get current configuration
-(opencode/get-config client)
-
-;; Update configuration
-(opencode/update-config client new-config)
-
-;; List available providers
-(opencode/list-providers client)
-
-;; List available commands
-(opencode/list-commands client)
-
-;; List available agents
-(opencode/list-agents client)
-```
-
-## Advanced Usage
-
-### New Chatbot Macro System
-
-The redesigned chatbot macro system provides a simplified, intuitive API for managing conversations with AI assistants.
-
-#### Basic Chatbot Definition
-
-```clojure
-(ns my-app.core
-  (:require [opencode-clj.macros.chatbot :as chatbot]))
-
-;; Define a chatbot with configuration
-(chatbot/def-chatbot coding-assistant
-  :base-url "http://127.0.0.1:9711"
-  :default-agent "claude-3"
-  :system-prompt "You are an expert programming assistant"
-  :temperature 0.7
-  :max-tokens 4000)
-```
-
-#### Conversation Management
-
-```clojure
-;; Simple conversation with automatic session management
-(chatbot/with-chat-session [session coding-assistant]
-  (let [response1 (chatbot/send-message session "Hello, can you help me with programming?")
-        response2 (chatbot/send-message session "Write a Python function to calculate factorial")
-        history (chatbot/get-conversation session)]
-    (println "Response:" (chatbot/extract-message-text response1))
-    (println "History count:" (count history))))
-```
-
-#### State Management
-
-```clojure
-;; Manage conversation state
-(chatbot/with-chat-session [session coding-assistant]
-  (chatbot/with-conversation-state [state {:mode :coding :language :python}]
-    (chatbot/update-state! state {:current-topic "functions"})
-    (let [current-state (chatbot/get-state state)]
-      (println "Current state:" current-state))))
-```
-
-#### Message Handlers
-
-```clojure
-;; Define custom message handlers
-(chatbot/def-message-handler handle-code-request
-  [msg session]
-  (when (clojure.string/includes? (clojure.string/lower-case (:text msg)) "code")
-    (println "Detected code request")
-    (chatbot/send-message session (:text msg) :agent "claude-3")))
-
-;; Use the handler
-(handle-code-request {:text "Can you write some code?"} session)
-```
-
-#### Conversation Pipeline
-
-```clojure
-;; Create message processing pipeline
-(def message-pipeline
-  (chatbot/conversation-pipeline [input _]
-    :preprocess preprocess-message
-    :process handle-message
-    :postprocess format-response))
-
-;; Use the pipeline
-(let [result (message-pipeline {:text "Hello"})]
-  (println "Processed:" result))
-```
-
-#### Multimodal Messages
-
-```clojure
-;; Create multimodal messages
-(let [image-message (chatbot/multimodal-message
-                     :text "Analyze this image"
-                     :image-path "/path/to/image.png"
-                     :audio-path "/path/to/audio.wav")]
-  (println "Multimodal message:" image-message))
-```
-
-### Async Operations
-
-```clojure
-(ns my-app.core
-  (:require [opencode-clj.macros.async :as async]
-            [clojure.core.async :refer [<!!]]))
-
-;; Perform async operations
-(let [result-chan (async/send-prompt-async client session-id prompt)]
-  (println "Response:" (<!! result-chan)))
-```
-
-### Legacy Chatbot Macros (Deprecated)
-
-```clojure
-(ns my-app.core
-  (:require [opencode-clj.macros.chatbot :as chatbot]))
-
-;; Legacy chatbot definition (deprecated)
-(chatbot/defchatbot my-bot "http://127.0.0.1:9711"
-  :system-prompt "You are a helpful coding assistant specialized in Clojure."
-  :temperature 0.7)
-```
-
-### DSL for Complex Workflows
-
-```clojure
-(ns my-app.core
-  (:require [opencode-clj.macros.dsl :as dsl]))
-
-;; Define complex workflows
-(dsl/defworkflow code-review-workflow
-  [client session-id file-path]
-  (dsl/send-prompt "Please review this code for potential issues")
-  (dsl/wait-for-response)
-  (dsl/send-prompt "Can you suggest improvements?")
-  (dsl/wait-for-response))
 ```
 
 ## CLI Application
-
-The library includes a ready-to-use CLI application:
 
 ```bash
 # Start interactive CLI
@@ -416,61 +340,89 @@ lein run -m opencode-clj.cli-main
 # With custom options
 lein run -m opencode-clj.cli-main -- --url http://my-server:9711
 lein run -m opencode-clj.cli-main -- --prompt 'ai> '
-lein run -m opencode-clj.cli-main -- --help
 ```
 
 ### CLI Commands
 
-- `help` - Show available commands
-- `status` - Show session status
-- `history` - Show conversation history
-- `clear` - Clear conversation history
-- `exit/quit/:q` - Exit the CLI
+| Command | Description |
+|---------|-------------|
+| `help` | Show available commands |
+| `status` | Show session status |
+| `history` | Show conversation history |
+| `clear` | Clear conversation history |
+| `exit/quit/:q` | Exit the CLI |
 
 ## Testing
 
-Run the test suite:
-
 ```bash
 lein test
-```
-
-Run specific tests:
-
-```bash
 lein test opencode-clj.core-test
-lein test :only opencode-clj.core-test/test-client-creation
 ```
 
 ## Building
-
-Build the project:
 
 ```bash
 lein deps
 lein uberjar
 ```
 
-## Configuration
+## Namespace Structure
 
-The library supports various configuration options:
+```
+opencode-clj.cluster
+├── core                    ; Cluster core
+├── node                    ; Node management
+├── coordinator             ; Cluster coordinator
+└── topology                ; Topology management
 
-- `:base-url` - OpenCode server URL (required)
-- `:directory` - Project directory path
-- `:http-opts` - HTTP client options (timeout, headers, etc.)
+opencode-clj.bus
+├── core                    ; Bus core
+├── inbound                 ; Inbound bus
+├── outbound                ; Outbound bus
+├── internal                ; Internal bus
+└── control                 ; Control bus
 
-## Error Handling
+opencode-clj.dispatcher
+├── core                    ; Dispatcher core
+├── router                  ; Routing strategies
+├── balancer                ; Load balancing
+└── circuit-breaker         ; Circuit breaker
 
-All functions return either success maps or throw exceptions:
+opencode-clj.agent
+├── core                    ; Agent core
+├── core-agent              ; Core Agent
+├── worker-agent            ; Worker Agent
+├── parallel-pool           ; Parallel Pool
+├── specialist-pool         ; Specialist Pool
+├── task-classifier         ; Task Classification
+├── intelligent-router      ; Intelligent Routing
+└── ai-classifier           ; AI-powered Classification
 
-```clojure
-(try
-  (let [response (opencode/send-prompt client session-id prompt)]
-    (if (:success response)
-      (println "Success:" response)
-      (println "Error:" (:error response))))
-  (catch Exception e
-    (println "Exception:" (.getMessage e))))
+opencode-clj.context
+├── core                    ; Context core
+├── manager                 ; Context Manager
+├── storage                 ; Storage layer
+└── compression             ; Compression/Summary
+
+opencode-clj.cache
+├── core                    ; Cache core
+├── l1                      ; L1 Cache
+├── l2                      ; L2 Cache
+└── l3                      ; L3 Cache (Redis)
+
+opencode-clj.pipeline
+├── core                    ; Pipeline core
+├── source                  ; Data source
+├── transform               ; Transformer
+└── sink                    ; Data sink
+
+opencode-clj.channel
+├── core                    ; Channel protocol
+├── adapter                 ; Adapter
+├── cli                     ; CLI Channel
+├── rabbitmq                ; RabbitMQ Channel
+├── http                    ; HTTP Channel
+└── websocket               ; WebSocket Channel
 ```
 
 ## Contributing
