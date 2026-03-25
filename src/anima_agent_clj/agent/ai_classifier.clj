@@ -212,6 +212,7 @@ User message: ")
               ;; Send prompt to OpenCode with fast model
               _ (messages/send-prompt client session-id
                                       {:parts [{:type "text" :text full-prompt}]}
+                                      nil  ; no agent
                                       {:model (or model "zhipuai-coding-plan/glm-4.7-flashx")})
 
               ;; Wait for response - no timeout

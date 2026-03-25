@@ -84,6 +84,55 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (messages/send-prompt client "123" {:invalid "format"}))))))
 
+(deftest test-send-prompt-with-model
+  (testing "Send prompt with model parameter in opts"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= "/session/123/message" endpoint))
+                                      (is (= {:parts [{:type "text" :text "Hello"}]
+                                              :providerID "zhipuai-coding-plan"
+                                              :modelID "glm-4.7-flashx"} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" "Hello" nil {:model "zhipuai-coding-plan/glm-4.7-flashx"})))))
+
+(deftest test-send-prompt-with-plain-model-name
+  (testing "Send prompt with plain model name (no slash) should use default provider"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= "/session/123/message" endpoint))
+                                      (is (= {:parts [{:type "text" :text "Hello"}]
+                                              :providerID "zhipuai-coding-plan"
+                                              :modelID "glm-4-flash"} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" "Hello" nil {:model "glm-4-flash"})))))
+
+(deftest test-send-prompt-with-model-and-agent
+  (testing "Send prompt with both agent and model parameters"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= "/session/123/message" endpoint))
+                                      (is (= {:parts [{:type "text" :text "Hello"}]
+                                              :agent "test-agent"
+                                              :providerID "openai"
+                                              :modelID "gpt-4"} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" "Hello" "test-agent" {:model "openai/gpt-4"})))))
+
+(deftest test-send-prompt-with-invalid-model-string
+  (testing "Send prompt with plain model name (no slash) should use default provider"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= "/session/123/message" endpoint))
+                                      (is (= {:parts [{:type "text" :text "Hello"}]
+                                              :providerID "zhipuai-coding-plan"
+                                              :modelID "invalid-model"} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" "Hello" nil {:model "invalid-model"})))))
+
 (deftest test-execute-command
   (testing "Execute command function calls correct endpoint"
     (with-redefs [http/post-request (fn [client endpoint body]
@@ -204,3 +253,104 @@
       (let [client {:base-url "http://127.0.0.1:9711"}]
         (is (thrown? clojure.lang.ExceptionInfo
                      (messages/list-messages client "123")))))))
+
+;; ══════════════════════════════════════════════════════════════════════════════
+;; New send-prompt tests with options support
+;; ══════════════════════════════════════════════════════════════════════════════
+
+(deftest test-send-prompt-with-agent-string
+  (testing "Send prompt with agent string (backward compatibility)"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= "/session/123/message" endpoint))
+                                      (is (= {:parts [{:type "text" :text "Hello"}]
+                                              :agent "my-agent"} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" "Hello" "my-agent")))))
+
+(deftest test-send-prompt-with-options-model
+  (testing "Send prompt with options map containing :model"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= "/session/123/message" endpoint))
+                                      (is (= {:parts [{:type "text" :text "Hello"}]
+                                              :providerID "zhipuai-coding-plan"
+                                              :modelID "claude-3-haiku"} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" "Hello" {:model "claude-3-haiku"})))))
+
+(deftest test-send-prompt-with-options-agent
+  (testing "Send prompt with options map containing :agent"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= "/session/123/message" endpoint))
+                                      (is (= {:parts [{:type "text" :text "Hello"}]
+                                              :agent "options-agent"} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" "Hello" {:agent "options-agent"})))))
+
+(deftest test-send-prompt-with-agent-and-options
+  (testing "Send prompt with agent string and options map"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= "/session/123/message" endpoint))
+                                      (is (= {:parts [{:type "text" :text "Hello"}]
+                                              :agent "my-agent"
+                                              :providerID "zhipuai-coding-plan"
+                                              :modelID "claude-3-haiku"} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" "Hello" "my-agent" {:model "claude-3-haiku"})))))
+
+(deftest test-send-prompt-with-nil-agent-and-options
+  (testing "Send prompt with nil agent and options map"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= "/session/123/message" endpoint))
+                                      (is (= {:parts [{:type "text" :text "Hello"}]
+                                              :providerID "zhipuai-coding-plan"
+                                              :modelID "glm-4-flash"} body))
+                                      (is (not (contains? body :agent)))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" "Hello" nil {:model "glm-4-flash"})))))
+
+(deftest test-send-prompt-options-does-not-add-nil-agent
+  (testing "Send prompt with options should not add :agent when nil"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (not (contains? body :agent)))
+                                      (is (= {:parts [{:type "text" :text "Hello"}]
+                                              :providerID "zhipuai-coding-plan"
+                                              :modelID "test-model"} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" {:text "Hello"} nil {:model "test-model"})))))
+
+(deftest test-send-prompt-parts-with-options
+  (testing "Send prompt with parts format and options"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= {:parts [{:type "text" :text "Part 1"}
+                                                      {:type "code" :text "code"}]
+                                              :providerID "zhipuai-coding-plan"
+                                              :modelID "haiku"} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123"
+                              {:parts [{:type "text" :text "Part 1"}
+                                       {:type "code" :text "code"}]}
+                              nil
+                              {:model "haiku"})))))
+
+(deftest test-send-prompt-empty-options
+  (testing "Send prompt with empty options map"
+    (with-redefs [http/post-request (fn [client endpoint body]
+                                      (is (= {:parts [{:type "text" :text "Hello"}]} body))
+                                      {:success true :data {:id "msg-1"}})
+                  utils/handle-response identity]
+      (let [client {:base-url "http://127.0.0.1:9711"}]
+        (messages/send-prompt client "123" "Hello" {})))))

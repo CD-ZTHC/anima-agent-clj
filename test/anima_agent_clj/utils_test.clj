@@ -132,3 +132,38 @@
   (testing "Validate required parameters with nil required keys"
     (let [params {:name "test" :age 25}]
       (is (= params (utils/validate-required params nil))))))
+
+(deftest test-parse-model-string
+  (testing "Parse valid model string with provider and model"
+    (is (= {:providerID "zhipuai-coding-plan" :modelID "glm-4.7-flashx"}
+           (utils/parse-model-string "zhipuai-coding-plan/glm-4.7-flashx"))))
+
+  (testing "Parse valid model string with simple provider and model"
+    (is (= {:providerID "openai" :modelID "gpt-4"}
+           (utils/parse-model-string "openai/gpt-4"))))
+
+  (testing "Parse model string with multiple slashes (only splits on first)"
+    (is (= {:providerID "provider" :modelID "model/variant"}
+           (utils/parse-model-string "provider/model/variant"))))
+
+  (testing "Return nil for string without slash"
+    (is (nil? (utils/parse-model-string "invalid-model-string"))))
+
+  (testing "Return nil for empty string"
+    (is (nil? (utils/parse-model-string ""))))
+
+  (testing "Return nil for nil input"
+    (is (nil? (utils/parse-model-string nil))))
+
+  (testing "Return nil for non-string input"
+    (is (nil? (utils/parse-model-string 123)))
+    (is (nil? (utils/parse-model-string {:key "value"}))))
+
+  (testing "Return nil for string with only slash"
+    (is (nil? (utils/parse-model-string "/"))))
+
+  (testing "Return nil for string with empty provider"
+    (is (nil? (utils/parse-model-string "/model"))))
+
+  (testing "Return nil for string with empty model"
+    (is (nil? (utils/parse-model-string "provider/")))))

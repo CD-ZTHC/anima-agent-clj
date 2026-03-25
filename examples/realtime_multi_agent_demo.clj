@@ -47,7 +47,9 @@
    [anima-agent-clj.agent.orchestrator :as orchestrator]
    [anima-agent-clj.agent.specialist-pool :as specialist-pool]
    [anima-agent-clj.agent.ai-classifier :as ai-classifier]
-   [anima-agent-clj.metrics :as metrics])
+   [anima-agent-clj.metrics :as metrics]
+   [anima-agent-clj.context.manager :as context-manager]
+   [anima-agent-clj.context.core :as context-core])
   (:import [java.util UUID Date]
            [java.text SimpleDateFormat]))
 
@@ -69,6 +71,97 @@
       (if ex
         (println (format "[%s] [%-5s] [%s] %s\nException: %s" ts level-str module msg (.getMessage ex)))
         (println (format "[%s] [%-5s] [%s] %s" ts level-str module msg))))))
+
+;; ══════════════════════════════════════════════════════════════════════════════
+;; Context Manager Integration - ARM-inspired Memory Controller
+;; ══════════════════════════════════════════════════════════════════════════════
+
+(defn create-task-context-key
+  "Create a context key following naming convention: task:{task-id}"
+  [task-id]
+  (str "task:" task-id))
+
+(defn create-subtask-context-key
+  "Create a subtask context key: task:{task-id}:subtask:{subtask-id}"
+  [task-id subtask-id]
+  (str "task:" task-id ":subtask:" subtask-id))
+
+(defn create-task-summary-key
+  "Create a task summary key: task:{task-id}:summary"
+  [task-id]
+  (str "task:" task-id ":summary"))
+
+(defn generate-task-summary
+  "Generate a compressed summary of task context for sub-agents.
+   Reduces token consumption while preserving essential context."
+  [original-request dependency-results]
+  (let [dep-summaries (when (seq dependency-results)
+                        (map (fn [[name result]]
+                               (str "- " name ": "
+                                    (if (= :success (:status result))
+                                      (str "✅ " (or (-> result :result :specialist) "完成"))
+                                      (str "❌ " (:error result)))))
+                             dependency-results))]
+    (str "## 任务摘要\n"
+         "### 原始请求\n" original-request "\n"
+         (when (seq dep-summaries)
+           (str "### 依赖任务结果\n" (str/join "\n" dep-summaries) "\n"))
+         "### 请基于以上上下文完成任务")))
+
+(defn store-task-context!
+  "Store full task context in Context Manager (L1/L2 tier)."
+  [ctx-manager task-id original-request subtasks]
+  (let [task-key (create-task-context-key task-id)]
+    ;; Store full context using the convenience function
+    (context-manager/set-task-context! ctx-manager task-id
+                                       {:original-request original-request
+                                        :subtasks subtasks
+                                        :created-at (Date.)})
+    ;; Generate and store summary
+    (let [summary-key (create-task-summary-key task-id)
+          summary {:request-preview (subs original-request 0 (min 200 (count original-request)))
+                   :subtask-count (count subtasks)}]
+      ;; Store summary using the underlying protocol method
+      (let [storage (-> ctx-manager :tiered-storage :l1)]
+        (context-core/set-entry storage summary-key summary {:ttl (* 24 60 60 1000)})))
+    task-key))
+
+(defn store-subtask-result!
+  "Store subtask execution result in Context Manager."
+  [ctx-manager task-id subtask-name result]
+  (let [subtask-key (create-subtask-context-key task-id subtask-name)
+        storage (-> ctx-manager :tiered-storage :l1)]
+    (context-core/set-entry storage subtask-key result {:ttl (* 24 60 60 1000)})))
+
+(defn get-task-context
+  "Retrieve task context from Context Manager."
+  [ctx-manager task-id]
+  (context-manager/get-task-context ctx-manager task-id))
+
+(defn get-dependency-results
+  "Get results of completed dependencies for a subtask."
+  [ctx-manager task-id dependency-names]
+  (when (seq dependency-names)
+    (into {}
+          (map (fn [dep-name]
+                 (let [subtask-key (create-subtask-context-key task-id dep-name)
+                       storage (-> ctx-manager :tiered-storage :l1)
+                       result (context-core/get-entry storage subtask-key)]
+                   [dep-name (when result (:value result))]))
+               dependency-names))))
+
+(defn build-subtask-context-payload
+  "Build full context payload for a subtask.
+   This is the key function that enables sub-agents to understand their task."
+  [ctx-manager task-id subtask-description dependency-names]
+  (let [task-context (get-task-context ctx-manager task-id)
+        original-request (:original-request task-context)
+        dependency-results (get-dependency-results ctx-manager task-id dependency-names)
+        summary (generate-task-summary original-request dependency-results)]
+    {:description subtask-description
+     :original-request original-request
+     :summary summary
+     :dependency-results dependency-results}))
 
 ;; ══════════════════════════════════════════════════════════════════════════════
 ;; TTL bounded cache
@@ -272,9 +365,83 @@
             {:status :error
              :error (:error result)}))))))
 
+(defn create-context-aware-specialist-handler
+  "Create a specialist handler that uses full context from Context Manager.
+
+   This handler receives injected context including:
+   - original-request: The user's original request
+   - summary: Compressed summary with dependency results
+   - dependency-results: Results from completed dependencies
+
+   The handler will:
+   1. Build a context-rich prompt
+   2. Send to OpenCode server
+   3. Store result in Context Manager
+   4. Return the result"
+  [client ctx-manager session-id-base specialist-name base-prompt-template]
+  (fn [task]
+    (let [session-id (str session-id-base "-" (name specialist-name))
+          payload (:payload task)
+          ;; Extract injected context
+          description (:description payload)
+          original-request (:original-request payload)
+          summary (:summary payload)
+          dependency-results (:dependency-results payload)
+          task-id (:task-id payload)
+          subtask-name (:subtask-name payload)
+
+          ;; Build context-rich prompt
+          context-section (when (or original-request summary)
+                           (str "\n\n## 上下文信息\n"
+                                (when original-request
+                                  (str "### 原始用户请求\n" original-request "\n"))
+                                (when summary
+                                  (str "### 任务摘要\n" summary "\n"))
+                                (when (seq dependency-results)
+                                  (str "### 依赖任务结果\n"
+                                       (str/join "\n"
+                                                 (map (fn [[name res]]
+                                                        (str "- " name ": "
+                                                             (if (= :success (:status res))
+                                                               "✅ 成功"
+                                                               (str "❌ 失败: " (:error res)))))
+                                                      dependency-results))))))
+
+          full-prompt (str (format base-prompt-template description)
+                          context-section)]
+
+      (println (str "  🔄 " specialist-name " 正在处理: " description))
+      (when original-request
+        (println (str "     📋 上下文: 已注入原始请求和依赖结果")))
+
+      (let [result (send-opencode-prompt client session-id full-prompt (str specialist-name))]
+        (if (= :success (:status result))
+          (do
+            (println (str "  ✅ " specialist-name " 完成"))
+            ;; Store result in Context Manager for other subtasks
+            (when (and ctx-manager task-id subtask-name)
+              (store-subtask-result! ctx-manager task-id subtask-name
+                                     {:status :success
+                                      :result {:specialist specialist-name
+                                               :response (:result result)
+                                               :session-id session-id}}))
+            {:status :success
+             :result {:specialist specialist-name
+                      :response (:result result)
+                      :session-id session-id}})
+          (do
+            (println (str "  ❌ " specialist-name " 失败: " (:error result)))
+            ;; Store failure result too
+            (when (and ctx-manager task-id subtask-name)
+              (store-subtask-result! ctx-manager task-id subtask-name
+                                     {:status :error :error (:error result)}))
+            {:status :error
+             :error (:error result)}))))))
+
 (defn register-opencode-specialists!
-  "Register specialists that call real OpenCode server."
-  [orchestrator client base-session-id]
+  "Register specialists that call real OpenCode server.
+   Uses context-aware handlers that receive full task context."
+  [orchestrator client ctx-manager base-session-id]
   (let [pool (:specialist-pool orchestrator)]
 
     ;; Project Setup Specialist
@@ -285,8 +452,8 @@
       :name "Project Setup Specialist"
       :type :project-specialist
       :capabilities #{:project-specialist :setup :project-init :configuration}
-      :handler (create-opencode-specialist-handler
-                client base-session-id
+      :handler (create-context-aware-specialist-handler
+                client ctx-manager base-session-id
                 "Project Setup"
                 "Initialize a new project with the following requirements: %s.
                  Create project structure, configuration files, and basic setup.")})
@@ -298,8 +465,8 @@
       :name "Database Specialist"
       :type :database-specialist
       :capabilities #{:database-specialist :database :schema-design :migrations}
-      :handler (create-opencode-specialist-handler
-                client base-session-id
+      :handler (create-context-aware-specialist-handler
+                client ctx-manager base-session-id
                 "Database"
                 "Design database schema for: %s.
                  Create tables, relationships, and migration files.")})
@@ -311,8 +478,8 @@
       :name "Backend Specialist"
       :type :backend-specialist
       :capabilities #{:backend-specialist :backend :api :server}
-      :handler (create-opencode-specialist-handler
-                client base-session-id
+      :handler (create-context-aware-specialist-handler
+                client ctx-manager base-session-id
                 "Backend"
                 "Implement backend API for: %s.
                  Create endpoints, business logic, and data models.")})
@@ -324,8 +491,8 @@
       :name "Frontend Specialist"
       :type :frontend-specialist
       :capabilities #{:frontend-specialist :frontend :ui :react}
-      :handler (create-opencode-specialist-handler
-                client base-session-id
+      :handler (create-context-aware-specialist-handler
+                client ctx-manager base-session-id
                 "Frontend"
                 "Build frontend UI components for: %s.
                  Create React components, styles, and user interactions.")})
@@ -337,8 +504,8 @@
       :name "Integration Specialist"
       :type :integration-specialist
       :capabilities #{:integration-specialist :integration :api-client}
-      :handler (create-opencode-specialist-handler
-                client base-session-id
+      :handler (create-context-aware-specialist-handler
+                client ctx-manager base-session-id
                 "Integration"
                 "Integrate frontend with backend for: %s.
                  Create API clients, data hooks, and state management.")})
@@ -350,8 +517,8 @@
       :name "Test Specialist"
       :type :test-specialist
       :capabilities #{:test-specialist :testing :unit-test :integration-test}
-      :handler (create-opencode-specialist-handler
-                client base-session-id
+      :handler (create-context-aware-specialist-handler
+                client ctx-manager base-session-id
                 "Testing"
                 "Write tests for: %s.
                  Create unit tests and integration tests.")})
@@ -359,7 +526,7 @@
     orchestrator))
 
 ;; ══════════════════════════════════════════════════════════════════════════════
-;; Dialog Agent - Non-blocking user interaction
+;; Dialog Agent - Blocking real-time interaction with background task support
 ;; ══════════════════════════════════════════════════════════════════════════════
 
 (defrecord DialogAgent
@@ -368,6 +535,7 @@
             session-id ; Dialog session ID
             orchestrator ; Task orchestrator
             ai-classifier ; AI-powered task classifier
+            context-manager ; Context Manager (Memory Controller)
             status ; atom<keyword>
             message-loop ; atom - input message loop
             input-ch ; User input channel
@@ -439,10 +607,159 @@
                                   (:subtasks task))]
         (cache-put! task-status-store task-id (assoc task :subtasks updated-subtasks))))))
 
+;; ══════════════════════════════════════════════════════════════════════════════
+;; Blocking Execution with Event Stream
+;; ══════════════════════════════════════════════════════════════════════════════
+
+(defn orchestrate-with-events!
+  "Execute a task with blocking main thread and real-time event stream.
+
+   This is the core execution model:
+   - Main thread blocks while waiting for completion
+   - Progress events are emitted in real-time
+   - Context is injected into subtasks via Context Manager
+
+   Returns a channel that emits events:
+   - {:type :progress, :data {...}}
+   - {:type :subtask-start, :data {:name ...}}
+   - {:type :subtask-complete, :data {:name ... :result ...}}
+   - {:type :complete, :data {:result ...}}
+   - {:type :error, :data {:error ...}}"
+  [orchestrator ctx-manager message task-id event-ch]
+  (async/go
+    (try
+      ;; Store task context in Context Manager
+      (let [trace-id (str (UUID/randomUUID))
+            _ (async/>! event-ch {:type :status :data {:status :decomposing :task-id task-id}})
+
+            ;; Decompose task
+            plan (orchestrator/decompose-task message trace-id)
+            subtask-count (count (:subtasks plan))]
+
+        ;; Store full context in Context Manager
+        (store-task-context! ctx-manager task-id message
+                             (map (fn [[_ st]] {:name (:name st) :type (:type st)})
+                                  (:subtasks plan)))
+
+        (async/>! event-ch {:type :decomposed
+                            :data {:subtask-count subtask-count
+                                   :subtasks (map (fn [[_ st]] {:name (:name st)
+                                                                :type (:type st)})
+                                                  (:subtasks plan))}})
+
+        ;; Inject context into each subtask before execution
+        (doseq [[subtask-id subtask] (:subtasks plan)]
+          (let [subtask-name (:name subtask)
+                deps (:dependencies subtask [])
+                ;; Build context payload for this subtask
+                context-payload (build-subtask-context-payload ctx-manager task-id
+                                                                (:description subtask "No description")
+                                                                deps)]
+            ;; Inject context into subtask payload
+            (swap! (:payload subtask) merge context-payload
+                   {:task-id task-id
+                    :subtask-name subtask-name})))
+
+        ;; Execute plan using the public API
+        (let [exec-ch (orchestrator/execute-plan! orchestrator plan)]
+
+          ;; Poll for completion with event emission
+          (loop []
+            (let [timeout-ch (async/timeout 2000)
+                  [result port] (async/alts! [exec-ch timeout-ch])]
+              (if (= port timeout-ch)
+                ;; Timeout - emit progress events
+                (let [progress-map @(:progress plan)
+                      completed (:completed progress-map 0)
+                      total (:total progress-map 1)
+                      running (:running progress-map 0)]
+
+                  ;; Emit subtask status events
+                  (doseq [[_ st] (:subtasks plan)]
+                    (let [st-status @(:status st)]
+                      (when (= :running st-status)
+                        (async/>! event-ch {:type :subtask-start
+                                            :data {:name (:name st) :type (:type st)}}))
+                      (when (#{:completed :failed} st-status)
+                        (async/>! event-ch {:type :subtask-complete
+                                            :data {:name (:name st)
+                                                   :status st-status}}))))
+
+                  (async/>! event-ch {:type :progress
+                                      :data {:completed completed
+                                             :total total
+                                             :running running}})
+                  (recur))
+
+                ;; Got result - task completed
+                (let [final-result result]
+                  ;; Store final result in Context Manager
+                  (context-manager/set-task-result! ctx-manager task-id final-result)
+
+                  (async/>! event-ch {:type :complete :data {:result final-result}})
+                  final-result))))))
+
+      (catch Exception e
+        (async/>! event-ch {:type :error :data {:error (.getMessage e)}})
+        {:status :error :error (.getMessage e)}))))
+
+(defn consume-events-blocking
+  "Consume events from channel with blocking behavior.
+   Displays real-time progress while blocking the main thread.
+   Returns final result when complete."
+  [event-ch timeout-ms]
+  (let [start-time (System/currentTimeMillis)]
+    (loop []
+      (if (> (- (System/currentTimeMillis) start-time) timeout-ms)
+        {:status :error :error "Timeout waiting for task completion"}
+        (let [timeout-ch (async/timeout 1000)
+              [event port] (async/alts! [event-ch timeout-ch])]
+          (if (= port timeout-ch)
+            (recur)
+            (when event
+              (case (:type event)
+                :status
+                (do
+                  (println (str "  📋 " (-> event :data :status)))
+                  (recur))
+
+                :decomposed
+                (let [data (:data event)]
+                  (println (str "  📊 分解为 " (:subtask-count data) " 个子任务:"))
+                  (doseq [st (:subtasks data)]
+                    (println (str "     - " (:name st) " (" (name (:type st)) ")")))
+                  (recur))
+
+                :subtask-start
+                (do
+                  (print (str "\n  🔄 " (-> event :data :name) " 开始执行... "))
+                  (flush)
+                  (recur))
+
+                :subtask-complete
+                (let [data (:data event)]
+                  (println (if (= :success (:status data))
+                            "✅ 完成"
+                            (str "❌ 失败: " (:error data))))
+                  (recur))
+
+                :complete
+                (do
+                  (println "\n  ✅ 所有任务完成!")
+                  (:result event))
+
+                :error
+                (do
+                  (println (str "\n  ❌ 错误: " (-> event :data :error)))
+                  {:status :error :error (-> event :data :error)})
+
+                (recur)))))))))
+
 (defn execute-background-task
   "Execute a task in the background, updating status as it progresses.
+   Uses Context Manager to store and inject context into subtasks.
    Returns a channel that will receive the final result."
-  [orchestrator message task-id]
+  [orchestrator ctx-manager message task-id]
   (async/go
     (try
       ;; Update progress
@@ -457,6 +774,11 @@
         (println (str "  📊 创建了 " subtask-count " 个子任务: "
                   (str/join ", " (map #(:name (second %)) (:subtasks plan)))))
 
+        ;; Store task context in Context Manager
+        (store-task-context! ctx-manager task-id message
+                             (map (fn [[_ st]] {:name (:name st) :type (:type st)})
+                                  (:subtasks plan)))
+
         ;; Update with subtask info
         (update-task-status! task-id
                              {:progress 10
@@ -466,6 +788,19 @@
                                                 :specialist (:specialist-type st)
                                                 :status :pending})
                                              (:subtasks plan))})
+
+        ;; Inject context into each subtask before execution
+        (doseq [[subtask-id subtask] (:subtasks plan)]
+          (let [subtask-name (:name subtask)
+                deps (:dependencies subtask [])
+                ;; Build context payload with dependency results
+                context-payload (build-subtask-context-payload ctx-manager task-id
+                                                                (:description subtask "No description")
+                                                                deps)]
+            ;; Inject context into subtask payload
+            (swap! (:payload subtask) merge context-payload
+                   {:task-id task-id
+                    :subtask-name subtask-name})))
 
         ;; Execute plan
         (let [exec-ch (orchestrator/execute-plan! orchestrator plan)]
@@ -499,6 +834,9 @@
                     (let [st-status @(:status st)]
                       (update-subtask-status! task-id (:name st) st-status)))
 
+                  ;; Store final result in Context Manager
+                  (context-manager/set-task-result! ctx-manager task-id result)
+
                   (update-task-status! task-id
                                        {:status :completed
                                         :progress 100
@@ -520,17 +858,19 @@
          :error (.getMessage e)}))))
 
 (defn handle-background-task
-  "Start a background task and return immediately with task ID."
+  "Start a background task and return immediately with task ID.
+   Uses Context Manager for context storage and injection."
   [dialog-agent message]
   (let [orchestrator (:orchestrator dialog-agent)
+        ctx-manager (:context-manager dialog-agent)
         ;; Create task status
         task-status (create-task-status
                      {:name message
                       :type :complex-task})
         task-id (:id task-status)]
 
-    ;; Start background execution
-    (let [result-ch (execute-background-task orchestrator message task-id)]
+    ;; Start background execution with Context Manager
+    (let [result-ch (execute-background-task orchestrator ctx-manager message task-id)]
       ;; Store the background task channel
       (swap! (:background-tasks dialog-agent) assoc task-id result-ch)
 
@@ -626,8 +966,8 @@
   dialog-agent)
 
 (defn create-dialog-agent
-  "Create a new dialog agent."
-  [{:keys [client session-id orchestrator ai-classifier input-ch output-ch]
+  "Create a new dialog agent with Context Manager integration."
+  [{:keys [client session-id orchestrator ai-classifier context-manager input-ch output-ch]
     :or {session-id (make-session-id "dialog")
          input-ch (async/chan 100)
          output-ch (async/chan 100)}}]
@@ -637,6 +977,7 @@
    session-id
    orchestrator
    ai-classifier
+   context-manager
    (atom :stopped)
    (atom nil)
    input-ch
@@ -713,9 +1054,10 @@
   (println "       实时多Agent协作系统 - OpenCode Server 集成")
   (println "       Real-time Multi-Agent System with OpenCode Integration")
   (println (apply str (repeat 70 "═")))
-  (println "\n  系统架构:")
-  (println "    - Dialog Agent: 前台对话，不阻塞")
-  (println "    - Background Orchestrator: 后台任务编排")
+  (println "\n  系统架构 (ARM-inspired):")
+  (println "    - Dialog Agent: 主线程阻塞执行，实时反馈")
+  (println "    - Context Manager: 内存控制器，L1/L2/L3分层存储")
+  (println "    - Task Orchestrator: 任务编排，上下文注入")
   (println "    - Specialist Pool: 专家池，调用OpenCode API")
   (println "    - Status Store: 任务状态追踪")
   (println "\n  可用命令:")
@@ -729,7 +1071,7 @@
   (println (apply str (repeat 70 "═"))))
 
 (defn run-demo
-  "Run the real-time multi-agent demo."
+  "Run the real-time multi-agent demo with Context Manager integration."
   [{:keys [opencode-url classifier-model]
     :or {opencode-url "http://127.0.0.1:9711"
          classifier-model "claude-3-5-haiku-latest"}}]
@@ -755,6 +1097,10 @@
     (let [metrics-collector (metrics/create-collector {:id "realtime-demo"})
           base-session-id (make-session-id "demo")
 
+          ;; Create Context Manager (Memory Controller)
+          _ (println "   🗄️  创建 Context Manager (L1/L2/L3 分层存储)...")
+          ctx-manager (context-manager/create-manager {:enable-l2 true})
+
           ;; Create AI classifier for intelligent task routing
           _ (println "   🤖 创建AI分类器 (模型: " classifier-model ")...")
           ai-classifier (try
@@ -767,18 +1113,19 @@
                             (println "   ℹ️  将使用直接对话模式")
                             nil))
 
-          ;; Create orchestrator
+          ;; Create orchestrator with Context Manager
           orchestrator (-> (orchestrator/create-orchestrator
                             {:metrics metrics-collector})
-                           (register-opencode-specialists! client base-session-id)
+                           (register-opencode-specialists! client ctx-manager base-session-id)
                            (orchestrator/start-orchestrator!))
 
-          ;; Create dialog agent with AI classifier
+          ;; Create dialog agent with Context Manager
           dialog-agent (-> (create-dialog-agent
                             {:client client
                              :session-id (str base-session-id "-dialog")
                              :orchestrator orchestrator
-                             :ai-classifier ai-classifier})
+                             :ai-classifier ai-classifier
+                             :context-manager ctx-manager})
                            (start-dialog-agent!))
 
           ;; Create CLI channel

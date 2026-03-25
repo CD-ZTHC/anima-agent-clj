@@ -237,7 +237,7 @@
    (:dependencies template)
    (:priority template 5)
    (:specialist template)
-   nil
+   (atom {})
    (atom :pending)
    (atom nil)
    (atom nil)

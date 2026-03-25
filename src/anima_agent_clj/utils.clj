@@ -2,7 +2,7 @@
   "Utility functions for error handling and validation.
 
    Functions: handle-response, success?, error?, extract-error-message,
-              with-default-params, validate-required"
+              with-default-params, validate-required, parse-model-string"
   (:require [clojure.string :as str]))
 
 (defn handle-response
@@ -49,3 +49,20 @@
                       {:missing missing
                        :provided params})))
     params))
+
+(defn parse-model-string
+  "Parse a model string in 'provider/model' format into {:providerID provider :modelID model}.
+
+   Examples:
+   (parse-model-string \"zhipuai-coding-plan/glm-4.7-flashx\")
+   => {:providerID \"zhipuai-coding-plan\" :modelID \"glm-4.7-flashx\"}
+
+   (parse-model-string \"openai/gpt-4\")
+   => {:providerID \"openai\" :modelID \"gpt-4\"}
+
+   If the string doesn't contain '/', returns nil."
+  [model-str]
+  (when (and (string? model-str) (str/includes? model-str "/"))
+    (let [[provider model] (str/split model-str #"/" 2)]
+      (when (and (not (str/blank? provider)) (not (str/blank? model)))
+        {:providerID provider :modelID model}))))
